@@ -2,18 +2,26 @@
 export interface Props {
   title?: string;
 }
-const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
+import SpeedInsights from "@vercel/speed-insights/astro";
+const { title = "Patungan — Split Bill Cepat" } = Astro.props;
 ---
 
 <!doctype html>
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
-    <meta name="description" content="Split bill dari foto struk. Cepat, tanpa daftar, tanpa simpan data, tanpa AI." />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <meta
+      name="description"
+      content="Split bill dari foto struk. Cepat, tanpa daftar, tanpa simpan data, tanpa AI."
+    />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
+    <SpeedInsights />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -21,36 +29,49 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
       rel="stylesheet"
     />
     <!-- Tesseract.js loaded from CDN (avoids bundler issues with web workers) -->
-    <script is:inline src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+    <script
+      is:inline
+      src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
+    ></script>
     <!-- html-to-image from CDN -->
-    <script is:inline src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js"></script>
+    <script
+      is:inline
+      src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js"
+    ></script>
   </head>
   <body>
     <slot />
     <style is:global>
       :root {
-        --bg: #F8FAFC;
+        --bg: #f8fafc;
         --bg-card: #ffffff;
-        --ink: #0F172A;
+        --ink: #0f172a;
         --ink-soft: #334155;
-        --ink-muted: #64748B;
-        --accent: #10B981;
-        --accent-soft: #D1FAE5;
-        --line: #E2E8F0;
-        --line-soft: #F1F5F9;
+        --ink-muted: #64748b;
+        --accent: #10b981;
+        --accent-soft: #d1fae5;
+        --line: #e2e8f0;
+        --line-soft: #f1f5f9;
         --success: #059669;
-        --warn: #D97706;
-        --display: 'Fraunces', serif;
-        --body: 'Inter Tight', system-ui, sans-serif;
-        --mono: 'JetBrains Mono', monospace;
+        --warn: #d97706;
+        --display: "Fraunces", serif;
+        --body: "Inter Tight", system-ui, sans-serif;
+        --mono: "JetBrains Mono", monospace;
         --radius: 14px;
-        --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.06);
-        --shadow-md: 0 2px 6px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.10);
+        --shadow-sm:
+          0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.06);
+        --shadow-md:
+          0 2px 6px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.1);
       }
 
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
 
-      html, body {
+      html,
+      body {
         background: var(--bg);
         color: var(--ink);
         font-family: var(--body);
@@ -62,15 +83,33 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
 
       body {
         background-image:
-          radial-gradient(circle at 20% 0%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
-          radial-gradient(circle at 80% 100%, rgba(15, 23, 42, 0.04) 0%, transparent 45%);
+          radial-gradient(
+            circle at 20% 0%,
+            rgba(16, 185, 129, 0.08) 0%,
+            transparent 40%
+          ),
+          radial-gradient(
+            circle at 80% 100%,
+            rgba(15, 23, 42, 0.04) 0%,
+            transparent 45%
+          );
         min-height: 100vh;
       }
 
-      button { font-family: var(--body); cursor: pointer; border: none; background: none; }
-      input, select { font-family: var(--body); }
+      button {
+        font-family: var(--body);
+        cursor: pointer;
+        border: none;
+        background: none;
+      }
+      input,
+      select {
+        font-family: var(--body);
+      }
 
-      h1, h2, h3 {
+      h1,
+      h2,
+      h3 {
         font-family: var(--display);
         font-weight: 700;
         letter-spacing: -0.02em;
@@ -150,7 +189,8 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         background: var(--bg);
         display: block;
       }
-      .dropzone:hover, .dropzone.drag {
+      .dropzone:hover,
+      .dropzone.drag {
         border-color: var(--accent);
         background: var(--accent-soft);
       }
@@ -160,9 +200,17 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         color: var(--ink-muted);
         margin-bottom: 10px;
       }
-      .dropzone-text { font-weight: 500; margin-bottom: 4px; }
-      .dropzone-hint { font-size: 13px; color: var(--ink-muted); }
-      .dropzone input { display: none; }
+      .dropzone-text {
+        font-weight: 500;
+        margin-bottom: 4px;
+      }
+      .dropzone-hint {
+        font-size: 13px;
+        color: var(--ink-muted);
+      }
+      .dropzone input {
+        display: none;
+      }
 
       .preview {
         margin-top: 16px;
@@ -224,17 +272,34 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         transition: all 0.15s ease;
         border: 1px solid transparent;
       }
-      .btn-primary { background: var(--ink); color: var(--bg); }
-      .btn-primary:hover:not(:disabled) { background: var(--accent); }
-      .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+      .btn-primary {
+        background: var(--ink);
+        color: var(--bg);
+      }
+      .btn-primary:hover:not(:disabled) {
+        background: var(--accent);
+      }
+      .btn-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
       .btn-secondary {
         background: var(--bg-card);
         color: var(--ink);
         border-color: var(--line);
       }
-      .btn-secondary:hover { border-color: var(--ink); }
-      .btn-block { width: 100%; }
-      .btn-row { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+      .btn-secondary:hover {
+        border-color: var(--ink);
+      }
+      .btn-block {
+        width: 100%;
+      }
+      .btn-row {
+        display: flex;
+        gap: 10px;
+        margin-top: 16px;
+        flex-wrap: wrap;
+      }
 
       .input {
         width: 100%;
@@ -246,7 +311,10 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         color: var(--ink);
         transition: border-color 0.15s;
       }
-      .input:focus { outline: none; border-color: var(--accent); }
+      .input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
 
       .spinner {
         width: 16px;
@@ -256,7 +324,11 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         border-radius: 50%;
         animation: spin 0.7s linear infinite;
       }
-      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
 
       .item-row {
         display: flex;
@@ -265,7 +337,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         padding: 10px 0;
         border-bottom: 1px solid var(--line-soft);
       }
-      .item-row:last-child { border-bottom: none; }
+      .item-row:last-child {
+        border-bottom: none;
+      }
 
       .person-card {
         background: var(--bg-card);
@@ -288,7 +362,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         background: none;
         border: none;
       }
-      .person-remove:hover { color: var(--accent); }
+      .person-remove:hover {
+        color: var(--accent);
+      }
 
       .chip-grid {
         display: flex;
@@ -307,7 +383,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         transition: all 0.12s;
         font-size: 14px;
       }
-      .chip:hover { border-color: var(--ink-soft); }
+      .chip:hover {
+        border-color: var(--ink-soft);
+      }
       .chip.active {
         background: var(--accent-soft);
         border-color: var(--accent);
@@ -328,8 +406,12 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         border-color: var(--accent);
         color: white;
       }
-      .chip-info { flex: 1; }
-      .chip-name { font-weight: 500; }
+      .chip-info {
+        flex: 1;
+      }
+      .chip-name {
+        font-weight: 500;
+      }
       .chip-meta {
         font-size: 12px;
         color: var(--ink-muted);
@@ -337,8 +419,8 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
       }
       .chip-shared {
         font-size: 11px;
-        color: #D97706;
-        background: #FEF3C7;
+        color: #d97706;
+        background: #fef3c7;
         padding: 2px 6px;
         border-radius: 4px;
         margin-left: 6px;
@@ -350,7 +432,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         gap: 8px;
         margin-top: 14px;
       }
-      .add-person-row .input { flex: 1; }
+      .add-person-row .input {
+        flex: 1;
+      }
 
       .summary {
         background: var(--ink);
@@ -380,8 +464,13 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         padding: 14px 0;
         border-bottom: 1px solid rgba(248, 250, 252, 0.1);
       }
-      .summary-row:last-child { border-bottom: none; }
-      .summary-name { font-weight: 600; font-size: 16px; }
+      .summary-row:last-child {
+        border-bottom: none;
+      }
+      .summary-name {
+        font-weight: 600;
+        font-size: 16px;
+      }
       .summary-amount {
         font-family: var(--mono);
         font-weight: 700;
@@ -390,16 +479,16 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
       }
 
       .error {
-        background: #FEF2F2;
-        color: #DC2626;
+        background: #fef2f2;
+        color: #dc2626;
         padding: 12px 14px;
         border-radius: 9px;
         font-size: 14px;
         margin-top: 12px;
       }
       .info {
-        background: #FEF3C7;
-        color: #D97706;
+        background: #fef3c7;
+        color: #d97706;
         padding: 10px 14px;
         border-radius: 9px;
         font-size: 13px;
@@ -427,7 +516,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         font-weight: 700;
         color: var(--ink);
       }
-      .totals-row .mono { font-weight: 600; }
+      .totals-row .mono {
+        font-weight: 600;
+      }
 
       .step {
         display: flex;
@@ -455,7 +546,9 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         letter-spacing: -0.01em;
       }
 
-      .hidden { display: none !important; }
+      .hidden {
+        display: none !important;
+      }
 
       footer {
         text-align: center;
@@ -470,7 +563,7 @@ const { title = 'Patungan — Split Bill Cepat' } = Astro.props;
         left: -10000px;
         top: 0;
         width: 600px;
-        background: linear-gradient(180deg, #F8FAFC 0%, #ffffff 100%);
+        background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
         padding: 40px;
         font-family: var(--body);
         color: var(--ink);

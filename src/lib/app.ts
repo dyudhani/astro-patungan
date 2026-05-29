@@ -653,8 +653,15 @@ $("btn-download").addEventListener("click", () => {
     
     <div style="margin-top:30px; font-size:12px; color:#0F172A; opacity:0.5; text-align:center; font-weight:500;">— Struk digital dihitung dengan adil & transparan —</div>
 
-    <div style="margin-top:10px; font-size:12px; color:#0F172A; opacity:0.5; text-align:center; font-weight:500;"><span>&copy; dyudhani 2026 |</span> Gratis · tanpa daftar · tanpa server ·
-        OCR jalan di browser kamu</div>
+    <div style="margin-top:10px; font-size:12px; color:#0F172A; opacity:0.5; text-align:center; font-weight:500;">
+        <span>&copy; dyudhani 2026 |</span> Gratis · tanpa daftar · tanpa server · OCR jalan di browser kamu
+    </div>
+
+    <div style="margin-top:15px; font-size:13px; text-align:center; font-weight:bold;">
+      <a href="https://astro-patungan.vercel.app/" target="_blank" style="color:#10B981; text-decoration:none;">
+        🔗 astro-patungan.vercel.app
+      </a>
+    </div>
   `;
 
   // 2. Suntikkan CSS khusus Print agar yang lain disembunyikan dan background tercetak
