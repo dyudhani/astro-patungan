@@ -1,15 +1,6 @@
 /**
  * Parser untuk teks struk Indonesia.
  * Heuristik-based — bukan AI, tapi cukup ampuh untuk format struk umum di ID.
- *
- * Input: raw text dari Tesseract OCR
- * Output: { items, tax, service, discount }
- *
- * Asumsi format struk Indonesia umum:
- * - Item: "[qty] [nama] [harga]" atau "[nama] [qty]x [harga]" atau "[nama] [harga]"
- * - Harga: angka dengan/tanpa pemisah ribuan (titik atau koma)
- * - Tax/PPN/Pajak: biasanya 10-11% dari subtotal
- * - Service: biasanya 5-10%
  */
 
 export interface ParsedItem {
@@ -47,7 +38,6 @@ export function parseIDR(s: string): number | null {
     normalized = cleaned;
   } else if (lastDot > lastComma) {
     // titik adalah desimal (format US) ATAU ribuan (format ID tanpa desimal)
-    // Heuristik: kalau setelah titik terakhir <=2 digit, itu desimal
     const afterDot = cleaned.length - lastDot - 1;
     if (afterDot <= 2 && lastComma !== -1) {
       // koma=ribuan, titik=desimal
@@ -96,16 +86,32 @@ function looksLikeMetadata(line: string): boolean {
   return SKIP_KEYWORDS.some((kw) => lc.includes(kw));
 }
 
+// =============== PERBAIKAN LOGIKA CLEAN NAME ===============
 function cleanName(raw: string): string {
   let name = raw.trim();
-  // Buang trailing qty pattern dari nama
+  
+  // 1. Buang trailing qty pattern dari nama (contoh: "Nasi Goreng 2x")
   name = name.replace(/\s*\d{1,2}\s*[xX×]\s*$/, '').trim();
-  // Buang trailing harga satuan kalau ada (misal "@ 25.000")
-  name = name.replace(/@\s*[\d.,]+\s*$/, '').trim();
-  // Buang trailing punctuation
+  
+  // 2. Buang pola "@Rp25.000 Rp" atau "@ 25.000" di akhir nama.
+  // Regex ini membersihkan format seperti "@Rp18.612 Rp" yang dibaca oleh OCR aplikasi online delivery
+  name = name.replace(/@\s*(Rp)?\s*[\d.,]+\s*(Rp)?\s*$/i, '').trim();
+  
+  // 3. Buang kata "Rp" yang mungkin masih tertinggal sendirian di akhir
+  name = name.replace(/\s+Rp\s*$/i, '').trim();
+  
+  // 4. Hapus karakter "@" yang mungkin nyangkut di akhir teks
+  name = name.replace(/@+$/, '').trim();
+
+  // 5. Buang spasi ganda menjadi spasi tunggal
+  name = name.replace(/\s{2,}/g, ' ');
+
+  // 6. Buang trailing punctuation (koma, titik, strip di ujung kalimat)
   name = name.replace(/[.,;:|\-_]+$/, '').trim();
+  
   return name;
 }
+// ===========================================================
 
 // Cari baris yang match keyword tertentu lalu ambil angkanya
 function findAmount(lines: string[], keywords: string[]): number {
@@ -221,9 +227,12 @@ export function parseReceipt(rawText: string): ParsedReceipt {
 
   // Cari tax/service/discount/total dulu
   const tax = findAmount(lines, ['pajak', 'tax', 'ppn', 'pb1', 'pb 1']);
-  const service = findAmount(lines, ['service', 'svc', 'layanan']);
+  
+  // Karena GoFood pakai "Biaya penanganan", "Biaya lainnya" kita gabung ke service charge
+  const service = findAmount(lines, ['service', 'svc', 'layanan', 'penanganan', 'ongkir', 'biaya lainnya']);
+  
   const discount = findAmount(lines, ['diskon', 'discount', 'potongan', 'voucher']);
-  const subtotalFound = findAmount(lines, ['subtotal', 'sub total', 'sub-total']);
+  const subtotalFound = findAmount(lines, ['subtotal', 'sub total', 'sub-total', 'total harga']);
   const totalFound = findAmount(lines, ['grand total', 'total bayar', 'total pembayaran']);
 
   // Parse items
