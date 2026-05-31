@@ -194,16 +194,35 @@ function renderBillStep() {
   bill.items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "item-row";
+    row.style.display = "flex";
+    row.style.flexDirection = "column";
+    row.style.gap = "8px";
+    row.style.padding = "14px 0";
+    row.style.borderBottom = "1px solid #E2E8F0";
+
     row.innerHTML = `
-      <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" style="flex:1; color:#0F172A;" />
-      <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" style="width:55px; text-align:center; padding: 6px 4px; color:#0F172A;" />
-      <span style="color:#0F172A; opacity:0.6;">×</span>
-      <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" style="width:100px; text-align:right; padding: 6px 8px; color:#0F172A;" />
-      <button class="person-remove" data-remove="${item.id}" type="button">✕</button>
+      <div style="display:flex; gap:8px; width: 100%;">
+        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" style="flex:1; color:#0F172A; font-weight:600;" />
+        <button class="person-remove" data-remove="${item.id}" type="button" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:44px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px; width: 100%;">
+        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:#0F172A; border:1px solid #CBD5E1;" />
+        <span style="color:#64748B; font-size:14px; font-weight:bold;">×</span>
+        <div style="position:relative; flex:1; max-width: 120px;">
+          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#64748B;">@</span>
+          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:#0F172A; border:1px solid #CBD5E1;" />
+        </div>
+        <span style="color:#64748B; font-size:14px; font-weight:bold;">=</span>
+        <div style="position:relative; flex:1;">
+          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#10B981; font-weight:bold;">Rp</span>
+          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:#10B981; font-weight:bold; background:#F0FDF4; border:1px solid #A7F3D0;" />
+        </div>
+      </div>
     `;
     list.appendChild(row);
   });
 
+  $<HTMLSelectElement>("t-tax-mode").value = "nominal"; 
   $<HTMLInputElement>("t-tax").value = String(bill.tax);
   $<HTMLInputElement>("t-service").value = String(bill.service);
   $<HTMLInputElement>("t-discount").value = String(bill.discount);
@@ -213,6 +232,19 @@ function renderBillStep() {
 function updateBillTotals() {
   const subtotal = bill.items.reduce((s, i) => s + i.price * i.qty, 0);
   $("t-subtotal").textContent = fmtIDR(subtotal);
+
+  const taxMode = $<HTMLSelectElement>("t-tax-mode").value;
+  const taxInputVal = Math.max(0, Number($<HTMLInputElement>("t-tax").value) || 0);
+
+  if (taxMode === "percent") {
+    bill.tax = Math.round(subtotal * (taxInputVal / 100));
+    $("t-tax-nominal-display").textContent = "= " + fmtIDR(bill.tax);
+    $("t-tax-nominal-row").classList.remove("hidden");
+  } else {
+    bill.tax = taxInputVal;
+    $("t-tax-nominal-row").classList.add("hidden");
+  }
+
   const total = subtotal + bill.tax + bill.service - bill.discount;
   $("t-total").textContent = fmtIDR(Math.max(0, total));
 }
@@ -222,12 +254,37 @@ $("items-list").addEventListener("input", (e) => {
   const id = Number(t.dataset.id);
   const field = t.dataset.field;
   if (!id || !field) return;
+  
   const item = bill.items.find((i) => i.id === id);
   if (!item) return;
-  if (field === "name") item.name = t.value;
-  else if (field === "qty") item.qty = Math.max(1, Number(t.value) || 1);
-  else if (field === "price") item.price = Math.max(0, Number(t.value) || 0);
-  item.total = item.price * item.qty;
+
+  const row = t.closest(".item-row");
+
+  if (field === "name") {
+    item.name = t.value;
+  } else if (field === "qty") {
+    item.qty = Math.max(1, Number(t.value) || 1);
+    item.total = item.price * item.qty;
+    if (row) {
+      const totInput = row.querySelector(`[data-field="total"]`) as HTMLInputElement;
+      if (totInput) totInput.value = String(item.total);
+    }
+  } else if (field === "price") { 
+    item.price = Math.max(0, Number(t.value) || 0);
+    item.total = item.price * item.qty;
+    if (row) {
+      const totInput = row.querySelector(`[data-field="total"]`) as HTMLInputElement;
+      if (totInput) totInput.value = String(item.total);
+    }
+  } else if (field === "total") { 
+    item.total = Math.max(0, Number(t.value) || 0);
+    item.price = Math.round(item.total / item.qty);
+    if (row) {
+      const priceInput = row.querySelector(`[data-field="price"]`) as HTMLInputElement;
+      if (priceInput) priceInput.value = String(item.price);
+    }
+  }
+  
   updateBillTotals();
 });
 
@@ -255,14 +312,16 @@ $("btn-add-item").addEventListener("click", () => {
   last?.focus();
 });
 
-["t-tax", "t-service", "t-discount"].forEach((id) => {
+$("t-tax").addEventListener("input", updateBillTotals);
+$("t-tax-mode").addEventListener("change", updateBillTotals);
+
+["t-service", "t-discount"].forEach((id) => {
   $(id).addEventListener("input", (e) => {
     const v = Math.max(
       0,
       Number((e.target as HTMLInputElement).value) || 0,
     );
-    if (id === "t-tax") bill.tax = v;
-    else if (id === "t-service") bill.service = v;
+    if (id === "t-service") bill.service = v;
     else bill.discount = v;
     updateBillTotals();
   });
@@ -297,29 +356,51 @@ function renderPeopleStep() {
   const list = $("people-list");
   list.innerHTML = "";
 
-  people.forEach((person) => {
+  const peopleManager = document.createElement("div");
+  peopleManager.style.marginBottom = "20px";
+  peopleManager.style.paddingBottom = "20px";
+  peopleManager.style.borderBottom = "2px dashed #E2E8F0";
+
+  const tagsHtml = people.map(p => `
+    <div style="display:inline-flex; align-items:center; background:#F1F5F9; border:1px solid #CBD5E1; color:#0F172A; padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
+      👤 ${escapeHtml(p.name)}
+      <button type="button" data-remove-person="${p.id}" style="margin-left:8px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
+    </div>
+  `).join("");
+
+  peopleManager.innerHTML = `
+    <div style="font-size:14px; font-weight:bold; color:#0F172A; margin-bottom:10px;">Daftar Teman Patungan:</div>
+    <div style="display:flex; flex-wrap:wrap;">
+       ${people.length > 0 ? tagsHtml : '<span style="color:#64748B; font-size:13px; font-style:italic;">Belum ada yang gabung. Tambah di atas 👆</span>'}
+    </div>
+  `;
+  list.appendChild(peopleManager);
+
+  if (people.length === 0) return;
+
+  bill.items.forEach((item) => {
     const card = document.createElement("div");
     card.className = "person-card";
-    const chips = bill.items
-      .map((item) => {
+
+    const totalShares = getItemTotalShares(item.id);
+    const sharersCount = getItemSharersCount(item.id);
+
+    const chips = people
+      .map((person) => {
         const qty = person.items[item.id] || 0;
         const active = qty > 0;
-        const totalShares = getItemTotalShares(item.id);
-        const sharersCount = getItemSharersCount(item.id);
-        
-        const perHead = totalShares > 0 ? (item.total / totalShares) * qty : item.total;
-        const shareNote = active && sharersCount > 1 
-          ? `<span style="color:#FFFFFF; font-size:10px; font-weight:600; padding:2px 6px; background:#10B981; border-radius:4px; margin-left:6px;">Dibagi ${sharersCount}</span>` 
-          : "";
+        const perHead = totalShares > 0 ? (item.total / totalShares) * qty : 0;
 
         return `
           <div class="chip ${active ? "active" : ""}" style="display:flex; justify-content:space-between; align-items:center; padding-right:10px; border:${active ? '2px solid #10B981' : '1px solid #E2E8F0'}; background:#FFFFFF;">
             <div style="flex:1; cursor:pointer;" class="chip-main" data-person="${person.id}" data-item="${item.id}">
               <div class="chip-info">
-                <div class="chip-name" style="display:flex; align-items:center; color:#0F172A; font-weight:500;">
-                  ${escapeHtml(item.name || "(tanpa nama)")} ${shareNote}
+                <div class="chip-name" style="display:flex; align-items:center; color:#0F172A; font-weight:600;">
+                  👤 ${escapeHtml(person.name)}
                 </div>
-                <div class="chip-meta" style="color:#0F172A; opacity:0.7;">Bill Item: ${item.qty}× ${fmtIDR(item.price)} ${active ? `| <span style="color:#10B981; font-weight:bold; opacity:1;">Bayar: ${fmtIDR(perHead)}</span>` : ""}</div>
+                <div class="chip-meta" style="color:#0F172A; opacity:0.7;">
+                  ${active ? `<span style="color:#10B981; font-weight:bold; opacity:1;">Tanggungan: ${fmtIDR(perHead)}</span>` : "Belum ditagih"}
+                </div>
               </div>
             </div>
             <div class="chip-actions" style="display:flex; align-items:center; gap:8px;">
@@ -333,9 +414,17 @@ function renderPeopleStep() {
       .join("");
 
     card.innerHTML = `
-      <div class="person-head">
-        <input type="text" class="input person-name" value="${escapeHtml(person.name)}" data-person-name="${person.id}" style="flex:1; color:#0F172A; font-weight:bold;" />
-        <button class="person-remove" data-remove-person="${person.id}" type="button">Hapus</button>
+      <div class="item-head" style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed #CBD5E1; display:flex; justify-content:space-between; align-items:flex-start;">
+        <div>
+          <div style="font-weight:bold; font-size:16px; color:#0F172A;">🍽️ ${escapeHtml(item.name || "(Tanpa Nama)")}</div>
+          <div style="font-size:13px; color:#64748B; margin-top:4px;">${item.qty} Qty × ${fmtIDR(item.price)}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-weight:900; font-size:16px; color:#10B981;">${fmtIDR(item.total)}</div>
+          ${sharersCount > 0 
+            ? `<div style="font-size:10px; font-weight:600; background:#D1FAE5; color:#059669; padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Ditagih ke ${sharersCount} teman</div>` 
+            : `<div style="font-size:10px; font-weight:600; background:#FEE2E2; color:#DC2626; padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Belum ada yang bayar</div>`}
+        </div>
       </div>
       <div class="chip-grid" style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
     `;
@@ -345,6 +434,14 @@ function renderPeopleStep() {
 
 $("people-list").addEventListener("click", (e) => {
   const t = e.target as HTMLElement;
+
+  const removeBtn = t.closest("[data-remove-person]") as HTMLElement | null;
+  if (removeBtn) {
+    const pid = Number(removeBtn.dataset.removePerson);
+    people = people.filter((p) => p.id !== pid);
+    renderPeopleStep();
+    return;
+  }
 
   if (t.classList.contains("btn-qty")) {
     const pid = Number(t.dataset.person);
@@ -381,26 +478,11 @@ $("people-list").addEventListener("click", (e) => {
     renderPeopleStep();
     return;
   }
-
-  const removePerson = t.dataset.removePerson;
-  if (removePerson) {
-    people = people.filter((p) => p.id !== Number(removePerson));
-    renderPeopleStep();
-  }
-});
-
-$("people-list").addEventListener("input", (e) => {
-  const t = e.target as HTMLInputElement;
-  const pid = t.dataset.personName;
-  if (pid) {
-    const p = people.find((x) => x.id === Number(pid));
-    if (p) p.name = t.value;
-  }
 });
 
 $("btn-add-person").addEventListener("click", () => {
   const inp = $<HTMLInputElement>("new-person");
-  const name = inp.value.trim() || `Orang ${people.length + 1}`;
+  const name = inp.value.trim() || `Teman ${people.length + 1}`;
   people.push({ id: nextPersonId++, name, items: {} });
   inp.value = "";
   renderPeopleStep();
@@ -484,7 +566,7 @@ function setupBankInputs() {
     bankHtml.id = "bank-details-container";
     bankHtml.style.marginBottom = "20px";
     bankHtml.style.padding = "15px";
-    bankHtml.style.background = "#FFFFFF"; // Putih 
+    bankHtml.style.background = "#FFFFFF"; 
     bankHtml.style.borderRadius = "8px";
     bankHtml.style.border = "1px solid #E2E8F0";
     bankHtml.innerHTML = `
@@ -533,7 +615,7 @@ $("btn-calculate").addEventListener("click", () => {
         
         <div style="height:1px; background:#E2E8F0; margin:6px 0;"></div>
         
-        <div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
+        <div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
         ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
         ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
         ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#10B981; font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
@@ -582,11 +664,11 @@ $("btn-download").addEventListener("click", () => {
   let bankHtml = "";
   if (bName || bAcc || bHolder) {
     bankHtml = `
-      <div style="margin-bottom:24px; padding:16px; background-color:#FFFFFF; border-radius:12px; border: 2px dashed #10B981; text-align:center; page-break-inside: avoid;">
-        <div style="font-size:12px; color:#10B981; font-weight:bold; text-transform:uppercase; margin-bottom:8px; letter-spacing:0.5px;">Transfer Pembayaran Ke:</div>
-        ${bName ? `<div style="font-size:16px; font-weight:bold; color:#0F172A;">Bank ${escapeHtml(bName)}</div>` : ""}
-        ${bAcc ? `<div style="font-size:24px; font-family:monospace; font-weight:900; margin:6px 0; color:#0F172A; letter-spacing:1px; user-select:all;">${escapeHtml(bAcc)}</div>` : ""}
-        ${bHolder ? `<div style="font-size:14px; color:#0F172A; font-weight:600;">a.n. ${escapeHtml(bHolder)}</div>` : ""}
+      <div style="background-color: #0F172A; color: #F8FAFC; border-radius: 12px; padding: 20px; margin-bottom: 24px; text-align: center; page-break-inside: avoid; box-shadow: 0 4px 6px rgba(15,23,42,0.1);">
+        <div style="font-size: 12px; color: #10B981; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Transfer Pembayaran Ke</div>
+        ${bName ? `<div style="font-size: 16px; font-weight: 600; color: #F8FAFC;">Bank ${escapeHtml(bName)}</div>` : ""}
+        ${bAcc ? `<div style="font-size: 28px; font-family: monospace; font-weight: 900; margin: 4px 0; color: #10B981; letter-spacing: 2px; user-select: all;">${escapeHtml(bAcc)}</div>` : ""}
+        ${bHolder ? `<div style="font-size: 14px; color: #94A3B8; font-weight: 500;">a.n. ${escapeHtml(bHolder)}</div>` : ""}
       </div>
     `;
   }
@@ -594,29 +676,38 @@ $("btn-download").addEventListener("click", () => {
   const personHtml = lastResults
     .map(
       (r) => `
-    <div style="margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid #E2E8F0; page-break-inside: avoid;">
-      <div style="margin-bottom:12px;">
-        <span style="font-weight:bold; font-size:18px; color:#0F172A; display:block;">👤 ${escapeHtml(r.name)}</span>
+    <div style="background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 16px; page-break-inside: avoid;">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; border-bottom: 1px dashed #E2E8F0; padding-bottom: 12px;">
+        <div style="background-color: #F1F5F9; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 16px;">👤</div>
+        <span style="font-weight: 800; font-size: 18px; color: #0F172A;">${escapeHtml(r.name)}</span>
       </div>
-      <div style="font-size:14px; color:#0F172A;">
+
+      <div style="font-size: 14px; color: #334155;">
         ${r.items.map((i) => `
-          <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px;">
-            <div style="flex:1; padding-right:12px; word-break:break-word; line-height:1.4;">
-              • ${escapeHtml(i.name)} ${i.qty < i.totalShares ? `<span style="opacity:0.6;">(${i.qty}/${i.totalShares})</span>` : ''}
+          <div style="display:flex; justify-content:space-between; margin-bottom: 8px;">
+            <div style="flex:1; padding-right:12px; line-height: 1.4;">
+              <span style="font-weight: 600; color: #0F172A;">${escapeHtml(i.name)}</span>
+              ${i.qty < i.totalShares ? `<span style="color: #64748B; font-size: 12px; margin-left: 4px;">(${i.qty}/${i.totalShares})</span>` : ''}
             </div>
-            <div style="white-space:nowrap; text-align:right; font-family:monospace;">${fmtIDR(i.share)}</div>
-          </div>`).join("")}
+            <div style="font-family: monospace; font-weight: 500; color: #0F172A;">${fmtIDR(i.share)}</div>
+          </div>
+        `).join("")}
           
-        <div style="height:1px; background-color:#E2E8F0; margin:10px 0;"></div>
+        <div style="height: 1px; background-color: #E2E8F0; margin: 12px 0;"></div>
         
-        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; opacity:0.8;"><div style="flex:1;">• Pajak (Tax)</div><div style="white-space:nowrap; font-family:monospace;">${fmtIDR(r.taxShare)}</div></div>` : ""}
-        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; opacity:0.8;"><div style="flex:1;">• Service Charge</div><div style="white-space:nowrap; font-family:monospace;">${fmtIDR(r.serviceShare)}</div></div>` : ""}
-        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#10B981; font-weight:600;"><div style="flex:1;">• Diskon</div><div style="white-space:nowrap; font-family:monospace;">−${fmtIDR(r.discountShare)}</div></div>` : ""}
+        <div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569; font-weight:600;">
+          <div style="flex:1;">Subtotal</div>
+          <div style="font-family: monospace;">${fmtIDR(r.subtotal)}</div>
+        </div>
+
+        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569;"><div style="flex:1;">Pajak (Tax)</div><div style="font-family: monospace;">${fmtIDR(r.taxShare)}</div></div>` : ""}
+        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569;"><div style="flex:1;">Service Charge</div><div style="font-family: monospace;">${fmtIDR(r.serviceShare)}</div></div>` : ""}
+        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#10B981; font-weight: 600;"><div style="flex:1;">Diskon</div><div style="font-family: monospace;">−${fmtIDR(r.discountShare)}</div></div>` : ""}
       </div>
       
-      <div style="margin-top:16px; display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-weight:bold; font-size:16px; color:#0F172A;">Total Bayar:</span>
-        <span style="color:#FFFFFF; background-color:#10B981; padding:6px 12px; border-radius:8px; font-size:18px; font-weight:bold; font-family:monospace;">${fmtIDR(r.totalRounded)}</span>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E2E8F0; display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-weight: 700; font-size: 14px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px;">Total Bayar</span>
+        <span style="color: #FFFFFF; background-color: #10B981; padding: 6px 12px; border-radius: 8px; font-size: 18px; font-weight: 900; font-family: monospace; box-shadow: 0 2px 4px rgba(16,185,129,0.2);">${fmtIDR(r.totalRounded)}</span>
       </div>
     </div>
   `
@@ -625,46 +716,49 @@ $("btn-download").addEventListener("click", () => {
 
   const grandRounded = lastResults.reduce((s, r) => s + r.totalRounded, 0);
 
-  // 1. Buat Container Khusus untuk Di-Print
   const printContainer = document.createElement("div");
   printContainer.id = "print-container";
   printContainer.style.maxWidth = "600px";
   printContainer.style.margin = "0 auto";
-  printContainer.style.padding = "20px";
-  // WARNA DOMINAN APLIKASI
-  printContainer.style.backgroundColor = "#F8FAFC";
+  printContainer.style.padding = "24px 20px";
+  printContainer.style.backgroundColor = "#F8FAFC"; 
   printContainer.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
   printContainer.style.lineHeight = "1.5";
   printContainer.style.color = "#0F172A";
 
   printContainer.innerHTML = `
-    <div style="text-align:center; margin-bottom:24px;">
-      <div style="font-size:32px; font-weight:900; color:#0F172A; letter-spacing:-1px;">patungan.</div>
-      <div style="color:#0F172A; opacity:0.6; font-size:14px; margin-top:4px;">${dateStr}</div>
+    <div style="border-bottom: 2px solid #10B981; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <div style="font-size: 32px; font-weight: 900; color: #0F172A; letter-spacing: -1px; line-height: 1;">patungan.</div>
+        <a href="https://astro-patungan.vercel.app/" target="_blank" style="color: #10B981; text-decoration: none; font-size: 13px; font-weight: bold; margin-top: 6px; display: inline-block;">
+          🔗 astro-patungan.vercel.app
+        </a>
+      </div>
+      <div style="text-align: right;">
+        <div style="font-size: 12px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 1px;">Struk Digital</div>
+        <div style="font-size: 14px; color: #0F172A; font-weight: 600; margin-top: 2px;">${dateStr}</div>
+      </div>
     </div>
     
     ${bankHtml}
+    
+    <div style="margin-bottom: 8px; font-weight: bold; font-size: 16px; color: #0F172A;">Rincian Patungan:</div>
     ${personHtml}
     
-    <div style="margin-top:24px; padding:16px; background-color:#0F172A; border-radius:10px; display:flex; justify-content:space-between; align-items:center; page-break-inside: avoid;">
-      <span style="font-weight:bold; font-size:18px; color:#F8FAFC;">Total Terkumpul</span>
-      <span style="font-weight:900; font-size:20px; color:#10B981; white-space:nowrap; font-family:monospace;">${fmtIDR(grandRounded)}</span>
-    </div>
-    
-    <div style="margin-top:30px; font-size:12px; color:#0F172A; opacity:0.5; text-align:center; font-weight:500;">— Struk digital dihitung dengan adil & transparan —</div>
-
-    <div style="margin-top:10px; font-size:12px; color:#0F172A; opacity:0.5; text-align:center; font-weight:500;">
-        <span>&copy; dyudhani 2026 |</span> Gratis · tanpa daftar · tanpa server · OCR jalan di browser kamu
+    <div style="margin-top: 24px; padding: 20px; background-color: #F8FAFC; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border: 2px solid #10B981; page-break-inside: avoid;">
+      <div>
+        <div style="font-weight: 800; font-size: 18px; color: #0F172A;">Total Terkumpul</div>
+        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Sesuai struk + pembulatan</div>
+      </div>
+      <span style="font-weight: 900; font-size: 24px; color: #10B981; font-family: monospace;">${fmtIDR(grandRounded)}</span>
     </div>
 
-    <div style="margin-top:15px; font-size:13px; text-align:center; font-weight:bold;">
-      <a href="https://astro-patungan.vercel.app/" target="_blank" style="color:#10B981; text-decoration:none;">
-        🔗 astro-patungan.vercel.app
-      </a>
+    <div style="margin-top: 32px; text-align: center; color: #94A3B8; font-size: 12px;">
+      <div style="font-weight: 600;">Dihitung secara adil & transparan.</div>
+      <div style="margin-top: 4px;">&copy; dyudhani 2026 | No server, 100% aman.</div>
     </div>
   `;
 
-  // 2. Suntikkan CSS khusus Print agar yang lain disembunyikan dan background tercetak
   const printStyle = document.createElement("style");
   printStyle.id = "print-style";
   printStyle.innerHTML = `
@@ -688,10 +782,8 @@ $("btn-download").addEventListener("click", () => {
   document.head.appendChild(printStyle);
   document.body.appendChild(printContainer);
 
-  // 3. Panggil Dialog Print Browser
   window.print();
 
-  // 4. Bersihkan kembali setelah selesai print
   document.body.removeChild(printContainer);
   document.head.removeChild(printStyle);
 });

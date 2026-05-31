@@ -28,40 +28,38 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <!-- Tesseract.js loaded from CDN (avoids bundler issues with web workers) -->
     <script
       is:inline
       src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
-    ></script>
-    <!-- html-to-image from CDN -->
-    <script
-      is:inline
-      src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js"
     ></script>
   </head>
   <body>
     <slot />
     <style is:global>
       :root {
+        /* Warna Dominan (60%) */
         --bg: #f8fafc;
         --bg-card: #ffffff;
+
+        /* Warna Sekunder (30%) */
         --ink: #0f172a;
         --ink-soft: #334155;
         --ink-muted: #64748b;
+
+        /* Warna Aksen (10%) */
         --accent: #10b981;
         --accent-soft: #d1fae5;
+
+        /* Garis dan batas */
         --line: #e2e8f0;
         --line-soft: #f1f5f9;
-        --success: #059669;
-        --warn: #d97706;
+
         --display: "Fraunces", serif;
         --body: "Inter Tight", system-ui, sans-serif;
         --mono: "JetBrains Mono", monospace;
         --radius: 14px;
         --shadow-sm:
           0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.06);
-        --shadow-md:
-          0 2px 6px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.1);
       }
 
       * {
@@ -272,6 +270,7 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         transition: all 0.15s ease;
         border: 1px solid transparent;
       }
+      /* Tombol Primary menggunakan warna sekunder UI */
       .btn-primary {
         background: var(--ink);
         color: var(--bg);
@@ -417,15 +416,6 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         color: var(--ink-muted);
         font-family: var(--mono);
       }
-      .chip-shared {
-        font-size: 11px;
-        color: #d97706;
-        background: #fef3c7;
-        padding: 2px 6px;
-        border-radius: 4px;
-        margin-left: 6px;
-        font-weight: 500;
-      }
 
       .add-person-row {
         display: flex;
@@ -456,26 +446,6 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         color: rgba(248, 250, 252, 0.6);
         font-size: 14px;
         margin-bottom: 22px;
-      }
-
-      .summary-row {
-        display: flex;
-        justify-content: space-between;
-        padding: 14px 0;
-        border-bottom: 1px solid rgba(248, 250, 252, 0.1);
-      }
-      .summary-row:last-child {
-        border-bottom: none;
-      }
-      .summary-name {
-        font-weight: 600;
-        font-size: 16px;
-      }
-      .summary-amount {
-        font-family: var(--mono);
-        font-weight: 700;
-        font-size: 16px;
-        color: var(--accent);
       }
 
       .error {
@@ -555,99 +525,6 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         margin-top: 40px;
         color: var(--ink-muted);
         font-size: 13px;
-      }
-
-      /* Render target for download */
-      .render-target {
-        position: absolute;
-        left: -10000px;
-        top: 0;
-        width: 600px;
-        background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
-        padding: 40px;
-        font-family: var(--body);
-        color: var(--ink);
-      }
-      .render-target .rt-header {
-        text-align: center;
-        margin-bottom: 24px;
-        padding-bottom: 20px;
-        border-bottom: 2px dashed var(--line);
-      }
-      .render-target .rt-title {
-        font-family: var(--display);
-        font-size: 32px;
-        font-style: italic;
-        color: var(--accent);
-        font-weight: 900;
-      }
-      .render-target .rt-date {
-        font-family: var(--mono);
-        font-size: 12px;
-        color: var(--ink-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        margin-top: 4px;
-      }
-      .render-target .rt-person {
-        padding: 16px 0;
-        border-bottom: 1px solid var(--line-soft);
-      }
-      .render-target .rt-person-head {
-        display: flex;
-        justify-content: space-between;
-        align-items: baseline;
-        margin-bottom: 8px;
-      }
-      .render-target .rt-person-name {
-        font-family: var(--display);
-        font-size: 20px;
-        font-weight: 700;
-      }
-      .render-target .rt-person-amount {
-        font-family: var(--mono);
-        font-size: 20px;
-        font-weight: 700;
-        color: var(--accent);
-      }
-      .render-target .rt-items {
-        font-size: 13px;
-        color: var(--ink-soft);
-      }
-      .render-target .rt-item {
-        display: flex;
-        justify-content: space-between;
-        padding: 2px 0;
-      }
-      .render-target .rt-total-box {
-        margin-top: 20px;
-        padding: 16px;
-        background: var(--ink);
-        color: var(--bg);
-        border-radius: 12px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-      }
-      .render-target .rt-total-label {
-        font-family: var(--display);
-        font-size: 16px;
-        font-weight: 600;
-      }
-      .render-target .rt-total-amount {
-        font-family: var(--mono);
-        font-size: 22px;
-        font-weight: 700;
-        color: var(--accent);
-      }
-      .render-target .rt-footer {
-        text-align: center;
-        margin-top: 20px;
-        font-family: var(--mono);
-        font-size: 11px;
-        color: var(--ink-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
       }
     </style>
   </body>
