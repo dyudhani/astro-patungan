@@ -30,9 +30,23 @@ let nextItemId = 1;
 let nextPersonId = 1;
 let selectedFile: File | null = null;
 
+// ============ CONFIG PEMBULATAN ============
+// ROUND_TO = kelipatan pembulatan (1000 = ribuan terdekat ke atas).
+//   Ganti ke 500 / 100 kalau mau lebih halus, atau 1 untuk tanpa pembulatan.
+// ROUND_MODE: "up" = ke atas (selalu cukup nutup bill), "nearest" = ke terdekat
+//   (paling adil), "down" = ke bawah (anti-overcharge, yang nalangin bisa nombok).
+type RoundMode = "up" | "nearest" | "down";
+const ROUND_TO = 1000;
+const ROUND_MODE = "nearest" as RoundMode;
+
 // ============ UTILS ============
 const fmtIDR = (n: number) => "Rp " + Math.round(n).toLocaleString("id-ID");
-const roundTotal = (n: number) => Math.round(n);
+const roundTotal = (n: number) => {
+  if (ROUND_TO <= 1) return Math.round(n);
+  if (ROUND_MODE === "nearest") return Math.round(n / ROUND_TO) * ROUND_TO;
+  if (ROUND_MODE === "down") return Math.floor(n / ROUND_TO) * ROUND_TO;
+  return Math.ceil(n / ROUND_TO) * ROUND_TO;
+};
 const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const escapeHtml = (s: string) =>
@@ -116,6 +130,81 @@ function setProgress(pct: number, text: string) {
   progressText.textContent = text;
 }
 
+// ============ OCR IMAGE PREPROCESSING ============
+// Struk Indonesia sering: kertas thermal pudar, foto miring, cahaya kurang,
+// resolusi kecil. Preprocessing ini menaikkan akurasi Tesseract secara signifikan
+// tanpa kirim data ke mana pun (semua di canvas browser).
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+    img.src = url;
+  });
+}
+
+async function preprocessImage(file: File): Promise<HTMLCanvasElement | File> {
+  try {
+    const img = await loadImage(file);
+    let w = img.naturalWidth || img.width;
+    let h = img.naturalHeight || img.height;
+    if (!w || !h) return file;
+
+    // Upscale struk yang terlalu kecil (foto thermal sering < 1000px) supaya
+    // huruf cukup besar untuk dikenali, lalu batasi maksimal agar tidak berat.
+    const TARGET_MIN = 1600;
+    const MAX_DIM = 2600;
+    let scale = 1;
+    if (Math.min(w, h) < TARGET_MIN) scale = TARGET_MIN / Math.min(w, h);
+    if (Math.max(w * scale, h * scale) > MAX_DIM)
+      scale = MAX_DIM / Math.max(w, h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return file;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, w, h);
+
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const d = imageData.data;
+
+    // 1) Grayscale (luminance) + hitung rata-rata untuk auto-contrast.
+    let sum = 0;
+    const gray = new Float32Array(d.length / 4);
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      gray[j] = g;
+      sum += g;
+    }
+    const mean = sum / gray.length;
+
+    // 2) Contrast stretch di sekitar mean — teks gelap makin tegas, latar makin
+    //    bersih. Kontras sedang (1.35) supaya teks pudar tidak ikut hilang.
+    const contrast = 1.35;
+    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+      let v = (gray[j] - mean) * contrast + mean;
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      d[i] = d[i + 1] = d[i + 2] = v;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    return canvas;
+  } catch {
+    return file; // kalau gagal, biar Tesseract baca file aslinya
+  }
+}
+
 btnScan.addEventListener("click", async () => {
   if (!selectedFile) return;
   btnScan.disabled = true;
@@ -125,17 +214,17 @@ btnScan.addEventListener("click", async () => {
   setProgress(5, "Memuat Tesseract OCR...");
 
   try {
-    const result = await Tesseract.recognize(selectedFile, "ind+eng", {
+    const worker = await Tesseract.createWorker("ind+eng", 1, {
       logger: (m: any) => {
         if (m.status === "loading tesseract core")
           setProgress(10, "Memuat OCR engine...");
         else if (m.status === "initializing tesseract")
-          setProgress(20, "Inisialisasi...");
+          setProgress(18, "Inisialisasi...");
         else if (m.status === "loading language traineddata") {
-          const pct = 25 + (m.progress || 0) * 25;
+          const pct = 20 + (m.progress || 0) * 20;
           setProgress(pct, "Mengunduh model bahasa Indonesia...");
         } else if (m.status === "initializing api")
-          setProgress(55, "Menyiapkan...");
+          setProgress(42, "Menyiapkan...");
         else if (m.status === "recognizing text") {
           const pct = 60 + (m.progress || 0) * 40;
           setProgress(
@@ -145,6 +234,23 @@ btnScan.addEventListener("click", async () => {
         }
       },
     });
+
+    let result: any;
+    try {
+      // Parameter yang dioptimalkan untuk struk POS Indonesia:
+      // PSM 6 = perlakukan sebagai satu blok teks seragam (layout struk 1 kolom),
+      // preserve_interword_spaces = jaga jarak antar kolom "nama .... harga".
+      await worker.setParameters({
+        tessedit_pageseg_mode: "6",
+        preserve_interword_spaces: "1",
+      });
+      setProgress(48, "Membersihkan gambar struk...");
+      const processed = await preprocessImage(selectedFile!);
+      setProgress(58, "Membaca struk...");
+      result = await worker.recognize(processed);
+    } finally {
+      await worker.terminate();
+    }
 
     const rawText = result.data.text;
     const parsed = parseReceipt(rawText);

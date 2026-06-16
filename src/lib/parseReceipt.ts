@@ -70,7 +70,14 @@ const SKIP_KEYWORDS = [
   'struk', 'receipt', 'invoice', 'nota', 'bill',
   'terima kasih', 'thank you', 'thanks',
   'npwp', 'nomor', 'no.', 'no :', 'no:',
-  'rounding', 'pembulatan'
+  'rounding', 'pembulatan',
+  // Noise umum di struk POS Indonesia (Moka, Pawoon, Olsera, Majoo, Qasir, iSeller, ESB, GoBiz)
+  'poin', 'point', 'member', 'membership', 'saldo',
+  'powered', 'www', 'http', '.com', 'telp', 'telepon', 'hotline',
+  'cabang', 'outlet', 'alamat', 'gerai',
+  'approval', 'batch', 'trace', 'antrian', 'queue', 'operator', 'shift', 'reprint',
+  'order id', 'order#', 'no urut', 'no. urut', 'order no', 'order :',
+  'dine in', 'dine-in', 'take away', 'takeaway', 'pesanan diterima'
 ];
 
 // Logika Cerdas: Mencegah tabrakan kata (Contoh: "Tipat" vs "Tip")
@@ -137,6 +144,19 @@ function tryParseItemLine(line: string): ParsedItem | null {
   if (looksLikeMetadata(trimmed)) return null;
 
   if (/^\(.*\)$/.test(trimmed)) return null;
+
+  // Skip baris tanggal / jam / nomor telepon — sering jadi "harga hantu" saat OCR.
+  // Hanya di-skip kalau hurufnya sedikit (bukan nama menu yang kebetulan ada angka).
+  const looksLikeDateTime =
+    /\b\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{2,4})?\b/.test(trimmed) ||
+    /\b\d{1,2}:\d{2}\b/.test(trimmed);
+  const looksLikePhone = /(?:\+?62|0)\d[\d\s\-]{7,}/.test(trimmed);
+  if (
+    (looksLikeDateTime || looksLikePhone) &&
+    (trimmed.match(/[a-zA-Z]/g) || []).length < 4
+  ) {
+    return null;
+  }
 
   const numberMatches = [...trimmed.matchAll(/[\d][\d.,]*/g)];
   const letterCount = (trimmed.match(/[a-zA-Z]/g) || []).length;
