@@ -1,4 +1,4 @@
-import { parseReceipt } from "./parseReceipt";
+import { parseReceipt, type ParsedReceipt } from "./parseReceipt";
 
 // Tesseract via CDN
 declare const Tesseract: any;
@@ -29,6 +29,9 @@ let people: Person[] = [];
 let nextItemId = 1;
 let nextPersonId = 1;
 let selectedFile: File | null = null;
+let payerName = ""; // siapa yang nalangin (settle-up)
+let savedBank: { name: string; acc: string; holder: string } | null = null;
+let rotation = 0; // rotasi gambar struk (0/90/180/270) untuk foto miring
 
 // ============ CONFIG PEMBULATAN ============
 // ROUND_TO = kelipatan pembulatan (1000 = ribuan terdekat ke atas).
@@ -76,9 +79,28 @@ const progressWrap = $("progress-wrap");
 const progressBar = $("progress-bar");
 const progressText = $("progress-text");
 
+// Tombol putar 90° untuk foto struk yang miring/sideways (disuntik ke #preview).
+const rotateBtn = document.createElement("button");
+rotateBtn.type = "button";
+rotateBtn.id = "preview-rotate";
+rotateBtn.textContent = "↻ Putar";
+rotateBtn.title = "Putar 90°";
+rotateBtn.style.cssText =
+  "position:absolute;bottom:8px;right:8px;background:rgba(15,23,42,0.85);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;z-index:2;";
+preview.appendChild(rotateBtn);
+rotateBtn.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  rotation = (rotation + 90) % 360;
+  previewImg.style.transform = `rotate(${rotation}deg)`;
+  previewImg.style.transformOrigin = "center";
+});
+
 function setFile(file: File | null) {
   selectedFile = file;
   uploadError.innerHTML = "";
+  rotation = 0;
+  previewImg.style.transform = "";
   if (file) {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -168,16 +190,22 @@ async function preprocessImage(file: File): Promise<HTMLCanvasElement | File> {
     w = Math.round(w * scale);
     h = Math.round(h * scale);
 
+    // Dukung rotasi (foto struk yang miring/sideways). Kalau 90/270, tukar dimensi.
+    const swap = rotation === 90 || rotation === 270;
     const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = swap ? h : w;
+    canvas.height = swap ? w : h;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) return file;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
 
-    const imageData = ctx.getImageData(0, 0, w, h);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const d = imageData.data;
 
     // 1) Grayscale (luminance) + hitung rata-rata untuk auto-contrast.
@@ -205,6 +233,25 @@ async function preprocessImage(file: File): Promise<HTMLCanvasElement | File> {
   }
 }
 
+// Skor hasil parse: makin banyak item bernama+berharga makin bagus, bonus kalau
+// subtotal/pajak/total ikut kebaca. Dipakai untuk memilih hasil dual-pass terbaik.
+function scoreParse(p: ParsedReceipt): number {
+  const goodItems = p.items.filter(
+    (i) => i.name && i.name !== "ORPHAN_PRICE" && i.total > 0,
+  ).length;
+  return (
+    goodItems * 100 +
+    (p.subtotal > 0 ? 15 : 0) +
+    (p.tax > 0 ? 5 : 0) +
+    (p.total > 0 ? 5 : 0)
+  );
+}
+
+// Progress untuk tahap "recognizing text" (di-scale per pass pada dual-pass).
+let ocrBase = 60;
+let ocrSpan = 40;
+let ocrPassText = "Membaca struk...";
+
 btnScan.addEventListener("click", async () => {
   if (!selectedFile) return;
   btnScan.disabled = true;
@@ -226,34 +273,43 @@ btnScan.addEventListener("click", async () => {
         } else if (m.status === "initializing api")
           setProgress(42, "Menyiapkan...");
         else if (m.status === "recognizing text") {
-          const pct = 60 + (m.progress || 0) * 40;
+          const pct = ocrBase + (m.progress || 0) * ocrSpan;
           setProgress(
             pct,
-            `Membaca struk... ${Math.round((m.progress || 0) * 100)}%`,
+            `${ocrPassText} ${Math.round((m.progress || 0) * 100)}%`,
           );
         }
       },
     });
 
-    let result: any;
+    let parsed: ParsedReceipt;
     try {
-      // Parameter yang dioptimalkan untuk struk POS Indonesia:
-      // PSM 6 = perlakukan sebagai satu blok teks seragam (layout struk 1 kolom),
-      // preserve_interword_spaces = jaga jarak antar kolom "nama .... harga".
-      await worker.setParameters({
-        tessedit_pageseg_mode: "6",
-        preserve_interword_spaces: "1",
-      });
+      await worker.setParameters({ preserve_interword_spaces: "1" });
       setProgress(48, "Membersihkan gambar struk...");
       const processed = await preprocessImage(selectedFile!);
-      setProgress(58, "Membaca struk...");
-      result = await worker.recognize(processed);
+
+      // ===== DUAL-PASS =====
+      // Pass 1 — PSM 6: anggap struk sebagai satu blok teks seragam.
+      await worker.setParameters({ tessedit_pageseg_mode: "6" });
+      ocrBase = 60;
+      ocrSpan = 20;
+      ocrPassText = "Membaca struk (1/2)...";
+      setProgress(60, ocrPassText);
+      const p1 = parseReceipt((await worker.recognize(processed)).data.text);
+
+      // Pass 2 — PSM 4: anggap struk sebagai satu kolom teks (ukuran bervariasi).
+      await worker.setParameters({ tessedit_pageseg_mode: "4" });
+      ocrBase = 80;
+      ocrSpan = 20;
+      ocrPassText = "Membaca ulang (2/2)...";
+      setProgress(80, ocrPassText);
+      const p2 = parseReceipt((await worker.recognize(processed)).data.text);
+
+      // Pilih hasil yang paling banyak menangkap item.
+      parsed = scoreParse(p2) > scoreParse(p1) ? p2 : p1;
     } finally {
       await worker.terminate();
     }
-
-    const rawText = result.data.text;
-    const parsed = parseReceipt(rawText);
 
     bill = {
       items: parsed.items.map((it) => ({
@@ -353,6 +409,7 @@ function updateBillTotals() {
 
   const total = subtotal + bill.tax + bill.service - bill.discount;
   $("t-total").textContent = fmtIDR(Math.max(0, total));
+  scheduleSave();
 }
 
 $("items-list").addEventListener("input", (e) => {
@@ -536,6 +593,8 @@ function renderPeopleStep() {
     `;
     list.appendChild(card);
   });
+
+  scheduleSave();
 }
 
 $("people-list").addEventListener("click", (e) => {
@@ -684,7 +743,273 @@ function setupBankInputs() {
       </div>
     `;
     $("step-result").insertBefore(bankHtml, $("summary-list"));
+    ["bank-name-input", "bank-acc-input", "bank-holder-input"].forEach((id) =>
+      $(id).addEventListener("input", scheduleSave),
+    );
   }
+  // Pulihkan data rekening dari sesi tersimpan (kalau ada).
+  if (savedBank) {
+    $<HTMLInputElement>("bank-name-input").value = savedBank.name || "";
+    $<HTMLInputElement>("bank-acc-input").value = savedBank.acc || "";
+    $<HTMLInputElement>("bank-holder-input").value = savedBank.holder || "";
+    savedBank = null;
+  }
+}
+
+// ============ SETTLE-UP + SHARE (disuntik ke #step-result sekali) ============
+function setupResultExtras() {
+  if (!$("settle-container")) {
+    const wrap = document.createElement("div");
+    wrap.id = "settle-container";
+    wrap.style.cssText =
+      "background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:16px;margin-top:16px;";
+    wrap.innerHTML = `
+      <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:8px;">🤝 Siapa yang nalangin / bayar duluan?</div>
+      <select id="settle-payer" class="input" style="color:#0F172A;cursor:pointer;"></select>
+      <div id="settle-list" style="margin-top:12px;"></div>`;
+    const firstRow = $("step-result").querySelector(".btn-row");
+    if (firstRow) $("step-result").insertBefore(wrap, firstRow);
+    else $("step-result").appendChild(wrap);
+    $("settle-payer").addEventListener("change", () => {
+      payerName = $<HTMLSelectElement>("settle-payer").value;
+      renderSettle();
+      scheduleSave();
+    });
+  }
+
+  if (!$("result-actions")) {
+    const row = document.createElement("div");
+    row.id = "result-actions";
+    row.className = "btn-row";
+    row.style.marginTop = "16px";
+    row.innerHTML = `
+      <button type="button" id="btn-share-wa" class="btn btn-block" style="background:#25D366;color:#fff;font-weight:bold;">📲 Bagikan ke WhatsApp</button>
+      <button type="button" id="btn-copy" class="btn btn-block" style="background:#F1F5F9;color:#0F172A;border:1px solid #E2E8F0;">📋 Salin teks</button>`;
+    const firstRow = $("step-result").querySelector(".btn-row");
+    if (firstRow) $("step-result").insertBefore(row, firstRow);
+    else $("step-result").appendChild(row);
+
+    $("btn-share-wa").addEventListener("click", () => {
+      window.open(
+        "https://wa.me/?text=" + encodeURIComponent(buildShareText()),
+        "_blank",
+      );
+    });
+    $("btn-copy").addEventListener("click", async () => {
+      const text = buildShareText();
+      try {
+        await navigator.clipboard.writeText(text);
+        const b = $("btn-copy");
+        const old = b.textContent;
+        b.textContent = "✓ Tersalin!";
+        setTimeout(() => {
+          b.textContent = old;
+        }, 1500);
+      } catch {
+        alert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
+      }
+    });
+  }
+}
+
+function renderSettle() {
+  // Kalau orang yang dipilih sudah dihapus, reset.
+  if (payerName && !lastResults.some((r) => r.name === payerName)) payerName = "";
+
+  const sel = $<HTMLSelectElement>("settle-payer");
+  if (sel) {
+    sel.innerHTML = ['<option value="">— Pilih yang nalangin —</option>']
+      .concat(
+        lastResults.map(
+          (r) => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`,
+        ),
+      )
+      .join("");
+    sel.value = payerName;
+  }
+
+  const list = $("settle-list");
+  if (!list) return;
+  if (!payerName) {
+    list.innerHTML = `<div style="font-size:13px;color:#64748B;">Pilih satu orang yang nalangin — nanti muncul siapa transfer berapa ke dia.</div>`;
+    return;
+  }
+  const others = lastResults.filter(
+    (r) => r.name !== payerName && r.totalRounded > 0,
+  );
+  const totalIn = others.reduce((s, r) => s + r.totalRounded, 0);
+  list.innerHTML = `
+    <div style="font-size:13px;color:#0F172A;margin-bottom:8px;">${escapeHtml(payerName)} nalangin semua, akan terima total <b>${fmtIDR(totalIn)}</b>:</div>
+    ${others
+      .map(
+        (r) => `
+      <div style="display:flex;justify-content:space-between;padding:8px 10px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;margin-bottom:6px;font-size:14px;color:#0F172A;">
+        <span>${escapeHtml(r.name)} → ${escapeHtml(payerName)}</span>
+        <span class="mono" style="font-weight:700;color:#10B981;">${fmtIDR(r.totalRounded)}</span>
+      </div>`,
+      )
+      .join("")}`;
+}
+
+function buildShareText(): string {
+  const lines: string[] = ["*Patungan* 🧾"];
+  const bank = captureBank();
+  if (bank && (bank.name || bank.acc || bank.holder)) {
+    lines.push("", "💳 Transfer ke:");
+    if (bank.name) lines.push("Bank " + bank.name);
+    if (bank.acc) lines.push(bank.acc);
+    if (bank.holder) lines.push("a.n. " + bank.holder);
+  }
+  lines.push("");
+  lastResults.forEach((r) => {
+    lines.push(`👤 *${r.name}* — ${fmtIDR(r.totalRounded)}`);
+    r.items.forEach((i) =>
+      lines.push(
+        `   • ${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}: ${fmtIDR(i.share)}`,
+      ),
+    );
+  });
+  const grand = lastResults.reduce((s, r) => s + r.totalRounded, 0);
+  lines.push("", `💰 Total: ${fmtIDR(grand)}`);
+  if (payerName) {
+    const others = lastResults.filter(
+      (r) => r.name !== payerName && r.totalRounded > 0,
+    );
+    if (others.length) {
+      lines.push("", `🤝 Transfer ke *${payerName}* (yang nalangin):`);
+      others.forEach((r) => lines.push(`   ${r.name}: ${fmtIDR(r.totalRounded)}`));
+    }
+  }
+  lines.push("", "via patungan. — https://astro-patungan.vercel.app/");
+  return lines.join("\n");
+}
+
+// ============ AUTO-SAVE SESI (localStorage, tetap 100% offline) ============
+const SAVE_KEY = "patungan_session_v1";
+let saveTimer: number | undefined;
+
+function captureBank(): { name: string; acc: string; holder: string } | null {
+  const n = $<HTMLInputElement>("bank-name-input");
+  if (!n) return savedBank;
+  return {
+    name: n.value || "",
+    acc: $<HTMLInputElement>("bank-acc-input")?.value || "",
+    holder: $<HTMLInputElement>("bank-holder-input")?.value || "",
+  };
+}
+
+function saveState() {
+  try {
+    const data = {
+      v: 1,
+      bill,
+      people,
+      nextItemId,
+      nextPersonId,
+      payerName,
+      bank: captureBank(),
+      ts: Date.now(),
+    };
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch {
+    /* localStorage bisa tidak tersedia (mode privat) — abaikan */
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer !== undefined) clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveState, 400);
+}
+
+function clearState() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch {
+    /* noop */
+  }
+}
+
+function restoreSession(s: any) {
+  try {
+    bill = s.bill;
+    people = s.people || [];
+    const maxItemId = bill.items.reduce(
+      (m: number, i: BillItem) => Math.max(m, i.id),
+      0,
+    );
+    const maxPersonId = people.reduce(
+      (m: number, p: Person) => Math.max(m, p.id),
+      0,
+    );
+    nextItemId = s.nextItemId || maxItemId + 1;
+    nextPersonId = s.nextPersonId || maxPersonId + 1;
+    payerName = s.payerName || "";
+    savedBank = s.bank || null;
+
+    renderBillStep();
+    $("step-bill").classList.remove("hidden");
+    if (people.length > 0) {
+      renderPeopleStep();
+      $("step-people").classList.remove("hidden");
+    }
+    $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function showRestoreBanner() {
+  let raw: string | null = null;
+  try {
+    raw = localStorage.getItem(SAVE_KEY);
+  } catch {
+    return;
+  }
+  if (!raw) return;
+  let s: any;
+  try {
+    s = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (!s || !s.bill) return;
+  const hasData =
+    (s.bill.items && s.bill.items.length > 0) ||
+    (s.people && s.people.length > 0);
+  if (!hasData) return;
+
+  let when = "";
+  try {
+    when = new Date(s.ts).toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    /* noop */
+  }
+
+  const banner = document.createElement("div");
+  banner.id = "restore-banner";
+  banner.style.cssText =
+    "background:#FFFFFF;border:1px solid #10B981;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;";
+  banner.innerHTML = `
+    <div style="color:#0F172A;font-size:14px;">💾 Ada sesi tersimpan${when ? ` <span style="color:#64748B;">(${when})</span>` : ""}. Lanjutkan?</div>
+    <div style="display:flex;gap:8px;">
+      <button type="button" id="restore-yes" class="btn" style="background:#10B981;color:#fff;padding:8px 16px;font-size:14px;">Lanjutkan</button>
+      <button type="button" id="restore-no" class="btn" style="background:#F1F5F9;color:#0F172A;padding:8px 16px;font-size:14px;">Hapus</button>
+    </div>`;
+  const up = $("step-upload");
+  up.parentElement?.insertBefore(banner, up);
+  $("restore-yes").addEventListener("click", () => {
+    restoreSession(s);
+    banner.remove();
+  });
+  $("restore-no").addEventListener("click", () => {
+    clearState();
+    banner.remove();
+  });
 }
 
 $("btn-calculate").addEventListener("click", () => {
@@ -749,6 +1074,10 @@ $("btn-calculate").addEventListener("click", () => {
       <span style="opacity:0.7; font-size:12px;">(Selisih: ${diffSign}${fmtIDR(diff)})</span>
     </div>
   `;
+
+  setupResultExtras();
+  renderSettle();
+  scheduleSave();
 
   $("step-result").classList.remove("hidden");
   $("step-result").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -900,6 +1229,9 @@ $("btn-reset").addEventListener("click", () => {
   bill = { items: [], tax: 0, service: 0, discount: 0 };
   people = [];
   selectedFile = null;
+  payerName = "";
+  savedBank = null;
+  clearState();
   fileInput.value = "";
   setFile(null);
   ["step-bill", "step-people", "step-result"].forEach((id) =>
@@ -907,5 +1239,8 @@ $("btn-reset").addEventListener("click", () => {
   );
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
+
+// ============ INIT ============
+showRestoreBanner();
 
 void lastGrandTotal;

@@ -63,8 +63,9 @@ const SKIP_KEYWORDS = [
   'service', 'svc', 'service charge', 'biaya layanan', 'gratuity', 'tip', 'delivery',
   'discount', 'diskon', 'potongan', 'voucher', 'promo', 'coupon',
   'cash', 'tunai', 'change', 'kembali', 'kembalian',
-  'bayar', 'payment', 'visa', 'mastercard', 'debit', 'credit', 'kredit', 'amex', 'card',
+  'bayar', 'payment', 'visa', 'mastercard', 'debit', 'credit', 'kredit', 'amex', 'card', 'edc',
   'qris', 'gopay', 'ovo', 'dana', 'shopeepay',
+  'pay by', 'mem id', 'login', 'user id', 'user pass', 'free login',
   'tanggal', 'date', 'jam', 'time',
   'kasir', 'cashier', 'meja', 'table', 'pax', 'guest', 'tamu',
   'struk', 'receipt', 'invoice', 'nota', 'bill',
@@ -85,7 +86,7 @@ function isKeywordMatch(text: string, kw: string): boolean {
   const lc = text.toLowerCase();
   
   // Untuk kata kunci super pendek, gunakan Exact Word Boundary (\b)
-  if (['tip', 'tax', 'vat', 'gst', 'svc', 'pb1', 'pax', 'due', 'card'].includes(kw)) {
+  if (['tip', 'tax', 'vat', 'gst', 'svc', 'pb1', 'pax', 'due', 'card', 'edc'].includes(kw)) {
     return new RegExp(`\\b${kw}\\b`, 'i').test(lc);
   }
   
@@ -156,6 +157,32 @@ function tryParseItemLine(line: string): ParsedItem | null {
     (trimmed.match(/[a-zA-Z]/g) || []).length < 4
   ) {
     return null;
+  }
+
+  // Pola struk minimarket 4 kolom: "NAMA  QTY  HARGA  TOTAL" (Circle K, Indomaret,
+  // Alfamart, dll). Nama boleh mengandung angka (mis. "VUSE GO 700"), jadi kita
+  // ambil 3 angka terakhir sebagai qty/harga/total dan sisanya jadi nama.
+  const trailing3 = trimmed.match(/(\d{1,3})\s+([\d.,]+)\s+([\d.,]+)\s*$/);
+  if (trailing3) {
+    const q = parseInt(trailing3[1], 10);
+    const unit = parseIDR(trailing3[2]);
+    const tot = parseIDR(trailing3[3]);
+    if (
+      q >= 1 &&
+      q <= 99 &&
+      unit !== null &&
+      unit >= 100 &&
+      unit <= 10_000_000 &&
+      tot !== null &&
+      tot >= 100 &&
+      tot <= 10_000_000 &&
+      Math.abs(q * unit - tot) / Math.max(tot, 1) < 0.15
+    ) {
+      const nm = cleanName(trimmed.slice(0, trailing3.index ?? 0));
+      if (nm.length >= 2 && (nm.match(/[a-zA-Z]/g) || []).length >= 2) {
+        return { name: nm, qty: q, price: unit, total: tot };
+      }
+    }
   }
 
   const numberMatches = [...trimmed.matchAll(/[\d][\d.,]*/g)];
@@ -266,8 +293,42 @@ export function parseReceipt(rawText: string): ParsedReceipt {
   }
 
   const calculatedSubtotal = items.reduce((s, i) => s + i.total, 0);
-  const subtotal = subtotalFound > 0 ? subtotalFound : calculatedSubtotal;
-  const total = totalFound > 0 ? totalFound : subtotal + tax + service - discount;
+  let subtotal = subtotalFound > 0 ? subtotalFound : calculatedSubtotal;
+  let finalTax = tax;
+  let finalService = service;
+  let total = totalFound > 0 ? totalFound : subtotal + tax + service - discount;
 
-  return { items, subtotal, tax, service, discount, total };
+  // Deteksi PAJAK SUDAH TERMASUK harga (mis. Circle K: "BKP SUDAH TERMASUK PPN").
+  // Kalau jumlah harga item ≈ grand total, berarti pajak/service tidak ditambah
+  // lagi di atasnya — kalau tetap ditambah, total jadi dobel.
+  const base = calculatedSubtotal > 0 ? calculatedSubtotal : subtotal;
+  const taxIncludedKeyword = /termasuk\s+(ppn|pajak|tax)|sudah\s+termasuk|incl(usive)?/i.test(
+    rawText,
+  );
+  if (
+    totalFound > 0 &&
+    base > 0 &&
+    Math.abs(base - totalFound) / totalFound < 0.03
+  ) {
+    finalTax = 0;
+    finalService = 0;
+    subtotal = base;
+    total = totalFound;
+  } else if (taxIncludedKeyword && base > 0 && (finalTax > 0 || finalService > 0)) {
+    // Ada penanda "termasuk PPN" tapi angka tidak konklusif — aman-kan dgn nol-kan
+    // pajak hanya jika item sudah mendekati total yang ditemukan.
+    if (totalFound > 0 && Math.abs(base - totalFound) / totalFound < 0.06) {
+      finalTax = 0;
+      finalService = 0;
+    }
+  }
+
+  return {
+    items,
+    subtotal,
+    tax: finalTax,
+    service: finalService,
+    discount,
+    total,
+  };
 }
