@@ -96,6 +96,69 @@ rotateBtn.addEventListener("click", (e) => {
   previewImg.style.transformOrigin = "center";
 });
 
+// ============ KAMERA LANGSUNG + TEMPEL TEKS (disuntik ke #step-upload) ============
+// Input tersembunyi dgn capture=environment → buka kamera belakang langsung di HP.
+const camInput = document.createElement("input");
+camInput.type = "file";
+camInput.accept = "image/*";
+camInput.setAttribute("capture", "environment");
+camInput.style.display = "none";
+document.body.appendChild(camInput);
+camInput.addEventListener("change", () => {
+  const f = camInput.files?.[0];
+  if (f) setFile(f);
+});
+
+const extraRow = document.createElement("div");
+extraRow.style.cssText =
+  "display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;";
+extraRow.innerHTML = `
+  <button type="button" id="btn-camera" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">📷 Foto pakai kamera</button>
+  <button type="button" id="btn-paste" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">📋 Tempel teks struk</button>`;
+btnSkip.parentElement?.appendChild(extraRow);
+
+const pastePanel = document.createElement("div");
+pastePanel.id = "paste-panel";
+pastePanel.className = "hidden";
+pastePanel.style.cssText = "margin-top:10px;";
+pastePanel.innerHTML = `
+  <textarea id="paste-text" class="input" rows="6" placeholder="Tempel teks struk di sini — tiap baris: nama + harga (mis. 'Es Teh 8.000')..." style="width:100%; font-family:var(--mono); font-size:13px; line-height:1.5;"></textarea>
+  <button type="button" id="btn-parse-text" class="btn btn-primary btn-block" style="margin-top:8px;">Proses teks → daftar pesanan</button>`;
+btnSkip.parentElement?.appendChild(pastePanel);
+
+$("btn-camera").addEventListener("click", () => camInput.click());
+$("btn-paste").addEventListener("click", () => {
+  pastePanel.classList.toggle("hidden");
+  if (!pastePanel.classList.contains("hidden"))
+    $<HTMLTextAreaElement>("paste-text").focus();
+});
+$("btn-parse-text").addEventListener("click", () => {
+  const txt = $<HTMLTextAreaElement>("paste-text").value.trim();
+  if (!txt) {
+    alert("Tempel teks struk dulu.");
+    return;
+  }
+  const parsed = parseReceipt(txt);
+  bill = {
+    items: parsed.items.map((it) => ({
+      id: nextItemId++,
+      name: it.name,
+      qty: it.qty,
+      price: it.price,
+      total: it.total,
+    })),
+    tax: parsed.tax,
+    service: parsed.service,
+    discount: parsed.discount,
+  };
+  if (bill.items.length === 0)
+    alert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
+  pastePanel.classList.add("hidden");
+  renderBillStep();
+  $("step-bill").classList.remove("hidden");
+  $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
 function setFile(file: File | null) {
   selectedFile = file;
   uploadError.innerHTML = "";
@@ -384,28 +447,40 @@ function renderBillStep() {
     list.appendChild(row);
   });
 
-  $<HTMLSelectElement>("t-tax-mode").value = "nominal"; 
+  // Saat render, tampilkan nilai apa adanya dalam mode nominal (Rp).
+  $<HTMLSelectElement>("t-tax-mode").value = "nominal";
+  $<HTMLSelectElement>("t-service-mode").value = "nominal";
+  $<HTMLSelectElement>("t-discount-mode").value = "nominal";
   $<HTMLInputElement>("t-tax").value = String(bill.tax);
   $<HTMLInputElement>("t-service").value = String(bill.service);
   $<HTMLInputElement>("t-discount").value = String(bill.discount);
   updateBillTotals();
 }
 
+// Hitung nominal dari sebuah baris (pajak/service/diskon) yang punya mode Rp/%.
+// Kalau mode "%", nilainya dihitung dari subtotal dan nominalnya ditampilkan.
+function resolveCharge(key: string, subtotal: number): number {
+  const mode = $<HTMLSelectElement>(`t-${key}-mode`).value;
+  const inputVal = Math.max(0, Number($<HTMLInputElement>(`t-${key}`).value) || 0);
+  const nominalRow = $(`t-${key}-nominal-row`);
+  let value = inputVal;
+  if (mode === "percent") {
+    value = Math.round(subtotal * (inputVal / 100));
+    $(`t-${key}-nominal-display`).textContent = "= " + fmtIDR(value);
+    nominalRow.classList.remove("hidden");
+  } else {
+    nominalRow.classList.add("hidden");
+  }
+  return value;
+}
+
 function updateBillTotals() {
   const subtotal = bill.items.reduce((s, i) => s + i.price * i.qty, 0);
   $("t-subtotal").textContent = fmtIDR(subtotal);
 
-  const taxMode = $<HTMLSelectElement>("t-tax-mode").value;
-  const taxInputVal = Math.max(0, Number($<HTMLInputElement>("t-tax").value) || 0);
-
-  if (taxMode === "percent") {
-    bill.tax = Math.round(subtotal * (taxInputVal / 100));
-    $("t-tax-nominal-display").textContent = "= " + fmtIDR(bill.tax);
-    $("t-tax-nominal-row").classList.remove("hidden");
-  } else {
-    bill.tax = taxInputVal;
-    $("t-tax-nominal-row").classList.add("hidden");
-  }
+  bill.tax = resolveCharge("tax", subtotal);
+  bill.service = resolveCharge("service", subtotal);
+  bill.discount = resolveCharge("discount", subtotal);
 
   const total = subtotal + bill.tax + bill.service - bill.discount;
   $("t-total").textContent = fmtIDR(Math.max(0, total));
@@ -475,20 +550,13 @@ $("btn-add-item").addEventListener("click", () => {
   last?.focus();
 });
 
-$("t-tax").addEventListener("input", updateBillTotals);
-$("t-tax-mode").addEventListener("change", updateBillTotals);
-
-["t-service", "t-discount"].forEach((id) => {
-  $(id).addEventListener("input", (e) => {
-    const v = Math.max(
-      0,
-      Number((e.target as HTMLInputElement).value) || 0,
-    );
-    if (id === "t-service") bill.service = v;
-    else bill.discount = v;
-    updateBillTotals();
-  });
-});
+// Pajak / Service / Diskon — semua punya input nilai + selector mode (Rp/%).
+["t-tax", "t-service", "t-discount"].forEach((id) =>
+  $(id).addEventListener("input", updateBillTotals),
+);
+["t-tax-mode", "t-service-mode", "t-discount-mode"].forEach((id) =>
+  $(id).addEventListener("change", updateBillTotals),
+);
 
 $("btn-to-people").addEventListener("click", () => {
   if (bill.items.length === 0) {
@@ -541,6 +609,21 @@ function renderPeopleStep() {
 
   if (people.length === 0) return;
 
+  // Tombol "bagi rata semua" + peringatan pesanan yang belum dibagi ke siapa pun.
+  const controls = document.createElement("div");
+  controls.style.cssText = "margin-bottom:16px;";
+  const unassigned = bill.items.filter(
+    (it) => getItemSharersCount(it.id) === 0,
+  );
+  controls.innerHTML = `
+    <button type="button" id="btn-split-global" style="width:100%; font-size:13px; padding:10px; border-radius:8px; border:1px dashed #10B981; background:#ECFDF5; color:#059669; font-weight:600; cursor:pointer; margin-bottom:${unassigned.length ? "10px" : "0"};">⚖️ Bagikan SEMUA pesanan rata ke semua teman</button>
+    ${
+      unassigned.length
+        ? `<div style="background:#FEF3C7; border:1px solid #FCD34D; color:#92400E; padding:10px 12px; border-radius:8px; font-size:13px;">⚠️ <b>${unassigned.length} pesanan belum dibagi</b>: ${unassigned.map((i) => escapeHtml(i.name || "(tanpa nama)")).join(", ")}</div>`
+        : ""
+    }`;
+  list.appendChild(controls);
+
   bill.items.forEach((item) => {
     const card = document.createElement("div");
     card.className = "person-card";
@@ -589,6 +672,10 @@ function renderPeopleStep() {
             : `<div style="font-size:10px; font-weight:600; background:#FEE2E2; color:#DC2626; padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Belum ada yang bayar</div>`}
         </div>
       </div>
+      <div style="display:flex; gap:8px; margin-bottom:10px;">
+        <button type="button" class="btn-split-all" data-item="${item.id}" style="flex:1; font-size:12px; padding:7px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#059669; font-weight:600; cursor:pointer;">⚖️ Bagi rata ke semua</button>
+        ${sharersCount > 0 ? `<button type="button" class="btn-clear-item" data-item="${item.id}" style="font-size:12px; padding:7px 12px; border-radius:6px; border:1px solid #E2E8F0; background:#FFFFFF; color:#64748B; cursor:pointer;">Kosongkan</button>` : ""}
+      </div>
       <div class="chip-grid" style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
     `;
     list.appendChild(card);
@@ -604,6 +691,39 @@ $("people-list").addEventListener("click", (e) => {
   if (removeBtn) {
     const pid = Number(removeBtn.dataset.removePerson);
     people = people.filter((p) => p.id !== pid);
+    renderPeopleStep();
+    return;
+  }
+
+  // Bagi rata SEMUA pesanan ke semua teman (qty 1 tiap orang tiap item).
+  if (t.closest("#btn-split-global")) {
+    bill.items.forEach((it) =>
+      people.forEach((p) => {
+        p.items[it.id] = 1;
+      }),
+    );
+    renderPeopleStep();
+    return;
+  }
+
+  // Bagi rata satu pesanan ke semua teman.
+  const splitAll = t.closest(".btn-split-all") as HTMLElement | null;
+  if (splitAll) {
+    const iid = Number(splitAll.dataset.item);
+    people.forEach((p) => {
+      p.items[iid] = 1;
+    });
+    renderPeopleStep();
+    return;
+  }
+
+  // Kosongkan satu pesanan dari semua teman.
+  const clearItem = t.closest(".btn-clear-item") as HTMLElement | null;
+  if (clearItem) {
+    const iid = Number(clearItem.dataset.item);
+    people.forEach((p) => {
+      delete p.items[iid];
+    });
     renderPeopleStep();
     return;
   }
@@ -1016,6 +1136,18 @@ $("btn-calculate").addEventListener("click", () => {
   if (people.length === 0) {
     alert("Tambah minimal 1 orang dulu");
     return;
+  }
+  const unassigned = bill.items.filter(
+    (it) => getItemSharersCount(it.id) === 0,
+  );
+  if (unassigned.length > 0) {
+    const names = unassigned.map((i) => i.name || "(tanpa nama)").join(", ");
+    if (
+      !confirm(
+        `${unassigned.length} pesanan belum dibagi ke siapa pun:\n${names}\n\nKalau dilanjut, pesanan itu tidak ditagih ke siapa pun (total terkumpul jadi kurang dari bill). Tetap lanjut?`,
+      )
+    )
+      return;
   }
   const { results, grandTotal } = calculate();
   lastResults = results;

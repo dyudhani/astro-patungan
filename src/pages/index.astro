@@ -139,21 +139,63 @@ import Layout from "../layouts/Layout.astro";
         </div>
         <div class="totals-row">
           <span>Service Charge</span>
-          <input
-            type="number"
-            class="input mono"
-            id="t-service"
-            style="max-width: 140px; text-align: right; padding: 6px 10px;"
-          />
+          <div style="display:flex; gap:6px; align-items:center;">
+            <select
+              id="t-service-mode"
+              class="input"
+              style="padding: 6px; width: 65px; text-align: center; cursor: pointer; color: var(--ink);"
+            >
+              <option value="nominal">Rp</option>
+              <option value="percent">%</option>
+            </select>
+            <input
+              type="number"
+              class="input mono"
+              id="t-service"
+              style="max-width: 120px; text-align: right; padding: 6px 10px;"
+            />
+          </div>
+        </div>
+        <div
+          class="totals-row hidden"
+          id="t-service-nominal-row"
+          style="padding:0; margin-top:-4px; justify-content:flex-end;"
+        >
+          <span
+            class="mono"
+            id="t-service-nominal-display"
+            style="font-size:13px; color:var(--ink-muted); font-weight:600;"
+          ></span>
         </div>
         <div class="totals-row">
           <span>Diskon</span>
-          <input
-            type="number"
-            class="input mono"
-            id="t-discount"
-            style="max-width: 140px; text-align: right; padding: 6px 10px;"
-          />
+          <div style="display:flex; gap:6px; align-items:center;">
+            <select
+              id="t-discount-mode"
+              class="input"
+              style="padding: 6px; width: 65px; text-align: center; cursor: pointer; color: var(--ink);"
+            >
+              <option value="nominal">Rp</option>
+              <option value="percent">%</option>
+            </select>
+            <input
+              type="number"
+              class="input mono"
+              id="t-discount"
+              style="max-width: 120px; text-align: right; padding: 6px 10px;"
+            />
+          </div>
+        </div>
+        <div
+          class="totals-row hidden"
+          id="t-discount-nominal-row"
+          style="padding:0; margin-top:-4px; justify-content:flex-end;"
+        >
+          <span
+            class="mono"
+            id="t-discount-nominal-display"
+            style="font-size:13px; color:var(--ink-muted); font-weight:600;"
+          ></span>
         </div>
         <div class="totals-row grand">
           <span>Total Bill</span>
