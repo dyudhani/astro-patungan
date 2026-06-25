@@ -1,0 +1,91 @@
+// Logika perhitungan patungan — fungsi MURNI (tanpa DOM / tanpa state global),
+// jadi gampang diuji & dipakai ulang.
+
+import type { Bill, Person, PersonResult } from "./types";
+import { roundTotal } from "./format";
+
+/** Berapa orang yang ikut menanggung satu item (qty > 0). */
+export const itemSharersCount = (people: Person[], itemId: number): number =>
+  people.filter((p) => (p.items[itemId] || 0) > 0).length;
+
+/** Total porsi sebuah item dari semua orang (untuk pembagian proporsional). */
+export const itemTotalShares = (people: Person[], itemId: number): number =>
+  people.reduce((sum, p) => sum + (p.items[itemId] || 0), 0);
+
+export interface SplitResult {
+  results: PersonResult[];
+  billSubtotal: number;
+  grandTotal: number;
+}
+
+/**
+ * Hitung tanggungan tiap orang. Tiap item dibagi proporsional sesuai porsi
+ * (qty orang / total porsi item), lalu pajak/service/diskon dibagi proporsional
+ * terhadap subtotal masing-masing.
+ */
+export function calculateSplit(bill: Bill, people: Person[]): SplitResult {
+  const billSubtotal = bill.items.reduce((s, i) => s + i.price * i.qty, 0);
+  const grandTotal = Math.max(
+    0,
+    billSubtotal + bill.tax + bill.service - bill.discount,
+  );
+
+  const results: PersonResult[] = people.map((p) => {
+    const personItems: PersonResult["items"] = [];
+    let subtotal = 0;
+
+    Object.entries(p.items).forEach(([idStr, qty]) => {
+      const iid = Number(idStr);
+      if (qty <= 0) return;
+      const item = bill.items.find((i) => i.id === iid);
+      if (!item) return;
+
+      const totalShares = itemTotalShares(people, iid) || 1;
+      const share = item.price * item.qty * (qty / totalShares);
+      subtotal += share;
+      personItems.push({ name: item.name || "(item)", share, qty, totalShares });
+    });
+
+    const ratio = billSubtotal > 0 ? subtotal / billSubtotal : 0;
+    const taxShare = bill.tax * ratio;
+    const serviceShare = bill.service * ratio;
+    const discountShare = bill.discount * ratio;
+    const totalRaw = subtotal + taxShare + serviceShare - discountShare;
+    const totalRounded = roundTotal(Math.max(0, totalRaw));
+
+    return {
+      name: p.name || "Tanpa nama",
+      items: personItems,
+      subtotal,
+      taxShare,
+      serviceShare,
+      discountShare,
+      totalRaw,
+      totalRounded,
+    };
+  });
+
+  return { results, billSubtotal, grandTotal };
+}
+
+/**
+ * Rekonsiliasi: bebankan selisih pembulatan ke 1 orang supaya total terkumpul
+ * PERSIS = bill (yang nalangin diutamakan, kalau tidak ke yang terbesar).
+ * Memodifikasi array results di tempat.
+ */
+export function applyReconcile(
+  results: PersonResult[],
+  grandTotal: number,
+  reconcile: boolean,
+  payerName: string,
+) {
+  if (!reconcile || results.length === 0) return;
+  const sum = results.reduce((s, r) => s + r.totalRounded, 0);
+  const diff = grandTotal - sum;
+  if (diff === 0) return;
+  const target =
+    (payerName &&
+      results.find((r) => r.name === payerName && r.totalRounded > 0)) ||
+    results.reduce((a, b) => (b.totalRounded > a.totalRounded ? b : a));
+  target.totalRounded = Math.max(0, target.totalRounded + diff);
+}

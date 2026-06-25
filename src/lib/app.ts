@@ -1,27 +1,19 @@
-import { parseReceipt, type ParsedReceipt } from "./parseReceipt";
+import { parseReceipt } from "./parseReceipt";
+import type { Bill, BillItem, Person, PersonResult } from "./types";
+import { $, escapeHtml } from "./dom";
+import { fmtIDR, roundCfg, csvCell, type RoundMode } from "./format";
+import {
+  itemSharersCount,
+  itemTotalShares,
+  calculateSplit,
+  applyReconcile as applyReconcileCalc,
+} from "./calc";
+import { recognizeReceipt } from "./ocr";
 
-// Tesseract via CDN
-declare const Tesseract: any;
-
-// ============ TYPES ============
-interface BillItem {
-  id: number;
-  name: string;
-  qty: number;
-  price: number;
-  total: number;
-}
-interface Bill {
-  items: BillItem[];
-  tax: number;
-  service: number;
-  discount: number;
-}
-interface Person {
-  id: number;
-  name: string;
-  items: Record<number, number>;
-}
+// html-to-image via CDN (untuk export PNG).
+declare const htmlToImage: {
+  toPng: (node: HTMLElement, opts?: any) => Promise<string>;
+};
 
 // ============ STATE ============
 let bill: Bill = { items: [], tax: 0, service: 0, discount: 0 };
@@ -32,38 +24,12 @@ let selectedFile: File | null = null;
 let payerName = ""; // siapa yang nalangin (settle-up)
 let savedBank: { name: string; acc: string; holder: string } | null = null;
 let rotation = 0; // rotasi gambar struk (0/90/180/270) untuk foto miring
+let paid: Record<string, boolean> = {}; // checklist "sudah bayar" per nama
+let payLink = ""; // link pembayaran (QRIS/e-wallet)
+let reconcile = false; // samakan total terkumpul ke bill (selisih ke 1 orang)
+let summaryPaidBound = false; // sudah pasang listener checkbox "lunas"?
 
-// ============ CONFIG PEMBULATAN ============
-// ROUND_TO = kelipatan pembulatan (1000 = ribuan terdekat ke atas).
-//   Ganti ke 500 / 100 kalau mau lebih halus, atau 1 untuk tanpa pembulatan.
-// ROUND_MODE: "up" = ke atas (selalu cukup nutup bill), "nearest" = ke terdekat
-//   (paling adil), "down" = ke bawah (anti-overcharge, yang nalangin bisa nombok).
-type RoundMode = "up" | "nearest" | "down";
-const ROUND_TO = 1000;
-const ROUND_MODE = "nearest" as RoundMode;
-
-// ============ UTILS ============
-const fmtIDR = (n: number) => "Rp " + Math.round(n).toLocaleString("id-ID");
-const roundTotal = (n: number) => {
-  if (ROUND_TO <= 1) return Math.round(n);
-  if (ROUND_MODE === "nearest") return Math.round(n / ROUND_TO) * ROUND_TO;
-  if (ROUND_MODE === "down") return Math.floor(n / ROUND_TO) * ROUND_TO;
-  return Math.ceil(n / ROUND_TO) * ROUND_TO;
-};
-const $ = <T extends HTMLElement>(id: string) =>
-  document.getElementById(id) as T;
-const escapeHtml = (s: string) =>
-  s.replace(
-    /[&<>"']/g,
-    (c) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[c]!,
-  );
+// roundTotal & roundCfg → ./format ; perhitungan → ./calc ; OCR → ./ocr
 
 // ============ STEP 1: UPLOAD ============
 const dropzone = $<HTMLLabelElement>("dropzone");
@@ -159,6 +125,128 @@ $("btn-parse-text").addEventListener("click", () => {
   $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
+// ============ BAGI RATA TOTAL SAJA (tanpa rincian item) ============
+const totalOnlyRow = document.createElement("div");
+totalOnlyRow.style.cssText = "margin-top:8px;";
+totalOnlyRow.innerHTML = `<button type="button" id="btn-total-only" class="btn btn-secondary btn-block" style="font-size:13px;">💸 Bagi rata total saja (tanpa rincian)</button>`;
+btnSkip.parentElement?.appendChild(totalOnlyRow);
+
+const totalOnlyPanel = document.createElement("div");
+totalOnlyPanel.id = "total-only-panel";
+totalOnlyPanel.className = "hidden";
+totalOnlyPanel.style.cssText =
+  "margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;";
+totalOnlyPanel.innerHTML = `
+  <input type="number" id="to-total" class="input mono" placeholder="Total bill (Rp)" style="flex:2; min-width:140px;" />
+  <input type="number" id="to-people" class="input mono" placeholder="Jumlah orang" min="1" value="2" style="flex:1; min-width:100px;" />
+  <button type="button" id="to-go" class="btn btn-primary" style="flex:1; min-width:100px;">Bagi rata</button>`;
+btnSkip.parentElement?.appendChild(totalOnlyPanel);
+
+$("btn-total-only").addEventListener("click", () =>
+  totalOnlyPanel.classList.toggle("hidden"),
+);
+$("to-go").addEventListener("click", () => {
+  const total = Math.max(0, Number($<HTMLInputElement>("to-total").value) || 0);
+  const n = Math.max(
+    1,
+    Math.floor(Number($<HTMLInputElement>("to-people").value) || 1),
+  );
+  if (total <= 0) {
+    alert("Isi total bill dulu.");
+    return;
+  }
+  bill = {
+    items: [{ id: nextItemId++, name: "Total Bill", qty: 1, price: total, total }],
+    tax: 0,
+    service: 0,
+    discount: 0,
+  };
+  const iid = bill.items[0].id;
+  people = [];
+  for (let i = 1; i <= n; i++)
+    people.push({ id: nextPersonId++, name: `Orang ${i}`, items: { [iid]: 1 } });
+  totalOnlyPanel.classList.add("hidden");
+  renderBillStep();
+  renderPeopleStep();
+  $("step-bill").classList.remove("hidden");
+  $("step-people").classList.remove("hidden");
+  $("step-people").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// ============ RIWAYAT PATUNGAN (UI) ============
+const histRow = document.createElement("div");
+histRow.style.cssText = "margin-top:8px;";
+histRow.innerHTML = `<button type="button" id="btn-history" class="btn btn-secondary btn-block" style="font-size:13px;">🕘 Riwayat patungan</button>`;
+btnSkip.parentElement?.appendChild(histRow);
+
+const histPanel = document.createElement("div");
+histPanel.id = "history-panel";
+histPanel.className = "hidden";
+histPanel.style.cssText = "margin-top:10px;";
+btnSkip.parentElement?.appendChild(histPanel);
+
+function renderHistory() {
+  const list = loadHistory();
+  if (list.length === 0) {
+    histPanel.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);padding:10px;">Belum ada riwayat. Selesaikan satu patungan dulu.</div>`;
+    return;
+  }
+  histPanel.innerHTML = list
+    .map((h, idx) => {
+      let when = "";
+      try {
+        when = new Date(h.ts).toLocaleString("id-ID", {
+          day: "2-digit",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch {
+        /* noop */
+      }
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;">
+        <div style="font-size:13px;color:var(--ink);"><b>${fmtIDR(h.grand || 0)}</b> · ${h.peopleCount || 0} orang<br/><span style="color:var(--ink-muted);font-size:12px;">${when}</span></div>
+        <div style="display:flex;gap:6px;">
+          <button type="button" data-hist-open="${idx}" class="btn" style="background:#10B981;color:#fff;font-size:12px;padding:6px 12px;">Buka</button>
+          <button type="button" data-hist-del="${idx}" class="btn" style="background:#FEE2E2;color:#EF4444;font-size:12px;padding:6px 10px;">Hapus</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+$("btn-history").addEventListener("click", () => {
+  histPanel.classList.toggle("hidden");
+  if (!histPanel.classList.contains("hidden")) renderHistory();
+});
+
+histPanel.addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  const openBtn = t.closest("[data-hist-open]") as HTMLElement | null;
+  if (openBtn) {
+    const h = loadHistory()[Number(openBtn.dataset.histOpen)];
+    if (h) {
+      restoreSession(h);
+      renderResult();
+      $("step-result").classList.remove("hidden");
+      $("step-result").scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    return;
+  }
+  const delBtn = t.closest("[data-hist-del]") as HTMLElement | null;
+  if (delBtn) {
+    const list = loadHistory();
+    list.splice(Number(delBtn.dataset.histDel), 1);
+    try {
+      localStorage.setItem(HIST_KEY, JSON.stringify(list));
+    } catch {
+      /* noop */
+    }
+    renderHistory();
+    return;
+  }
+});
+
 function setFile(file: File | null) {
   selectedFile = file;
   uploadError.innerHTML = "";
@@ -215,105 +303,7 @@ function setProgress(pct: number, text: string) {
   progressText.textContent = text;
 }
 
-// ============ OCR IMAGE PREPROCESSING ============
-// Struk Indonesia sering: kertas thermal pudar, foto miring, cahaya kurang,
-// resolusi kecil. Preprocessing ini menaikkan akurasi Tesseract secara signifikan
-// tanpa kirim data ke mana pun (semua di canvas browser).
-function loadImage(file: File): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(img);
-    };
-    img.onerror = (e) => {
-      URL.revokeObjectURL(url);
-      reject(e);
-    };
-    img.src = url;
-  });
-}
-
-async function preprocessImage(file: File): Promise<HTMLCanvasElement | File> {
-  try {
-    const img = await loadImage(file);
-    let w = img.naturalWidth || img.width;
-    let h = img.naturalHeight || img.height;
-    if (!w || !h) return file;
-
-    // Upscale struk yang terlalu kecil (foto thermal sering < 1000px) supaya
-    // huruf cukup besar untuk dikenali, lalu batasi maksimal agar tidak berat.
-    const TARGET_MIN = 1600;
-    const MAX_DIM = 2600;
-    let scale = 1;
-    if (Math.min(w, h) < TARGET_MIN) scale = TARGET_MIN / Math.min(w, h);
-    if (Math.max(w * scale, h * scale) > MAX_DIM)
-      scale = MAX_DIM / Math.max(w, h);
-    w = Math.round(w * scale);
-    h = Math.round(h * scale);
-
-    // Dukung rotasi (foto struk yang miring/sideways). Kalau 90/270, tukar dimensi.
-    const swap = rotation === 90 || rotation === 270;
-    const canvas = document.createElement("canvas");
-    canvas.width = swap ? h : w;
-    canvas.height = swap ? w : h;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return file;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
-    ctx.rotate((rotation * Math.PI) / 180);
-    ctx.drawImage(img, -w / 2, -h / 2, w, h);
-    ctx.restore();
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = imageData.data;
-
-    // 1) Grayscale (luminance) + hitung rata-rata untuk auto-contrast.
-    let sum = 0;
-    const gray = new Float32Array(d.length / 4);
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      gray[j] = g;
-      sum += g;
-    }
-    const mean = sum / gray.length;
-
-    // 2) Contrast stretch di sekitar mean — teks gelap makin tegas, latar makin
-    //    bersih. Kontras sedang (1.35) supaya teks pudar tidak ikut hilang.
-    const contrast = 1.35;
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      let v = (gray[j] - mean) * contrast + mean;
-      v = v < 0 ? 0 : v > 255 ? 255 : v;
-      d[i] = d[i + 1] = d[i + 2] = v;
-    }
-    ctx.putImageData(imageData, 0, 0);
-    return canvas;
-  } catch {
-    return file; // kalau gagal, biar Tesseract baca file aslinya
-  }
-}
-
-// Skor hasil parse: makin banyak item bernama+berharga makin bagus, bonus kalau
-// subtotal/pajak/total ikut kebaca. Dipakai untuk memilih hasil dual-pass terbaik.
-function scoreParse(p: ParsedReceipt): number {
-  const goodItems = p.items.filter(
-    (i) => i.name && i.name !== "ORPHAN_PRICE" && i.total > 0,
-  ).length;
-  return (
-    goodItems * 100 +
-    (p.subtotal > 0 ? 15 : 0) +
-    (p.tax > 0 ? 5 : 0) +
-    (p.total > 0 ? 5 : 0)
-  );
-}
-
-// Progress untuk tahap "recognizing text" (di-scale per pass pada dual-pass).
-let ocrBase = 60;
-let ocrSpan = 40;
-let ocrPassText = "Membaca struk...";
+// OCR (preprocessing + Tesseract dual-pass) dipindah ke ./ocr.ts → recognizeReceipt
 
 btnScan.addEventListener("click", async () => {
   if (!selectedFile) return;
@@ -324,55 +314,10 @@ btnScan.addEventListener("click", async () => {
   setProgress(5, "Memuat Tesseract OCR...");
 
   try {
-    const worker = await Tesseract.createWorker("ind+eng", 1, {
-      logger: (m: any) => {
-        if (m.status === "loading tesseract core")
-          setProgress(10, "Memuat OCR engine...");
-        else if (m.status === "initializing tesseract")
-          setProgress(18, "Inisialisasi...");
-        else if (m.status === "loading language traineddata") {
-          const pct = 20 + (m.progress || 0) * 20;
-          setProgress(pct, "Mengunduh model bahasa Indonesia...");
-        } else if (m.status === "initializing api")
-          setProgress(42, "Menyiapkan...");
-        else if (m.status === "recognizing text") {
-          const pct = ocrBase + (m.progress || 0) * ocrSpan;
-          setProgress(
-            pct,
-            `${ocrPassText} ${Math.round((m.progress || 0) * 100)}%`,
-          );
-        }
-      },
+    const parsed = await recognizeReceipt(selectedFile, {
+      rotation,
+      onProgress: setProgress,
     });
-
-    let parsed: ParsedReceipt;
-    try {
-      await worker.setParameters({ preserve_interword_spaces: "1" });
-      setProgress(48, "Membersihkan gambar struk...");
-      const processed = await preprocessImage(selectedFile!);
-
-      // ===== DUAL-PASS =====
-      // Pass 1 — PSM 6: anggap struk sebagai satu blok teks seragam.
-      await worker.setParameters({ tessedit_pageseg_mode: "6" });
-      ocrBase = 60;
-      ocrSpan = 20;
-      ocrPassText = "Membaca struk (1/2)...";
-      setProgress(60, ocrPassText);
-      const p1 = parseReceipt((await worker.recognize(processed)).data.text);
-
-      // Pass 2 — PSM 4: anggap struk sebagai satu kolom teks (ukuran bervariasi).
-      await worker.setParameters({ tessedit_pageseg_mode: "4" });
-      ocrBase = 80;
-      ocrSpan = 20;
-      ocrPassText = "Membaca ulang (2/2)...";
-      setProgress(80, ocrPassText);
-      const p2 = parseReceipt((await worker.recognize(processed)).data.text);
-
-      // Pilih hasil yang paling banyak menangkap item.
-      parsed = scoreParse(p2) > scoreParse(p1) ? p2 : p1;
-    } finally {
-      await worker.terminate();
-    }
 
     bill = {
       items: parsed.items.map((it) => ({
@@ -426,9 +371,12 @@ function renderBillStep() {
     row.style.borderBottom = "1px solid #E2E8F0";
 
     row.innerHTML = `
-      <div style="display:flex; gap:8px; width: 100%;">
+      <div style="display:flex; gap:6px; width: 100%; align-items:center;">
         <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" style="flex:1; color:#0F172A; font-weight:600;" />
-        <button class="person-remove" data-remove="${item.id}" type="button" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:44px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
+        <button data-move="up" data-id="${item.id}" type="button" title="Naik" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
+        <button data-move="down" data-id="${item.id}" type="button" title="Turun" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
+        <button data-dup="${item.id}" type="button" title="Duplikat" style="background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
+        <button class="person-remove" data-remove="${item.id}" type="button" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
       </div>
       <div style="display:flex; align-items:center; gap:6px; width: 100%;">
         <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:#0F172A; border:1px solid #CBD5E1;" />
@@ -528,11 +476,39 @@ $("items-list").addEventListener("input", (e) => {
 
 $("items-list").addEventListener("click", (e) => {
   const t = e.target as HTMLElement;
-  const removeId = t.dataset.remove;
-  if (removeId) {
-    bill.items = bill.items.filter((i) => i.id !== Number(removeId));
-    people.forEach(p => delete p.items[Number(removeId)]);
+
+  const removeBtn = t.closest("[data-remove]") as HTMLElement | null;
+  if (removeBtn) {
+    const id = Number(removeBtn.dataset.remove);
+    bill.items = bill.items.filter((i) => i.id !== id);
+    people.forEach((p) => delete p.items[id]);
     renderBillStep();
+    return;
+  }
+
+  // Duplikat pesanan (disisipkan tepat di bawahnya).
+  const dupBtn = t.closest("[data-dup]") as HTMLElement | null;
+  if (dupBtn) {
+    const id = Number(dupBtn.dataset.dup);
+    const idx = bill.items.findIndex((i) => i.id === id);
+    if (idx >= 0) {
+      bill.items.splice(idx + 1, 0, { ...bill.items[idx], id: nextItemId++ });
+      renderBillStep();
+    }
+    return;
+  }
+
+  // Urutkan naik/turun.
+  const moveBtn = t.closest("[data-move]") as HTMLElement | null;
+  if (moveBtn) {
+    const id = Number(moveBtn.dataset.id);
+    const idx = bill.items.findIndex((i) => i.id === id);
+    const ni = moveBtn.dataset.move === "up" ? idx - 1 : idx + 1;
+    if (idx >= 0 && ni >= 0 && ni < bill.items.length) {
+      [bill.items[idx], bill.items[ni]] = [bill.items[ni], bill.items[idx]];
+      renderBillStep();
+    }
+    return;
   }
 });
 
@@ -575,13 +551,9 @@ $("btn-to-people").addEventListener("click", () => {
 });
 
 // ============ STEP 3: PEOPLE ============
-function getItemSharersCount(itemId: number): number {
-  return people.filter((p) => (p.items[itemId] || 0) > 0).length;
-}
-
-function getItemTotalShares(itemId: number): number {
-  return people.reduce((sum, p) => sum + (p.items[itemId] || 0), 0);
-}
+// Wrapper tipis ke fungsi murni di ./calc (pakai state `people` saat ini).
+const getItemSharersCount = (itemId: number) => itemSharersCount(people, itemId);
+const getItemTotalShares = (itemId: number) => itemTotalShares(people, itemId);
 
 function renderPeopleStep() {
   const list = $("people-list");
@@ -594,8 +566,8 @@ function renderPeopleStep() {
 
   const tagsHtml = people.map(p => `
     <div style="display:inline-flex; align-items:center; background:#F1F5F9; border:1px solid #CBD5E1; color:#0F172A; padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
-      👤 ${escapeHtml(p.name)}
-      <button type="button" data-remove-person="${p.id}" style="margin-left:8px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
+      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" style="background:transparent; border:none; outline:none; color:#0F172A; font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
+      <button type="button" data-remove-person="${p.id}" style="margin-left:6px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
     </div>
   `).join("");
 
@@ -765,6 +737,19 @@ $("people-list").addEventListener("click", (e) => {
   }
 });
 
+// Ganti nama teman langsung di tag (tanpa re-render supaya fokus tidak hilang).
+$("people-list").addEventListener("input", (e) => {
+  const t = e.target as HTMLElement;
+  const pid = t.dataset.editPerson;
+  if (pid) {
+    const p = people.find((x) => x.id === Number(pid));
+    if (p) {
+      p.name = (t as HTMLInputElement).value;
+      scheduleSave();
+    }
+  }
+});
+
 $("btn-add-person").addEventListener("click", () => {
   const inp = $<HTMLInputElement>("new-person");
   const name = inp.value.trim() || `Teman ${people.length + 1}`;
@@ -781,67 +766,7 @@ $<HTMLInputElement>("new-person").addEventListener("keypress", (e) => {
 });
 
 // ============ STEP 4: CALCULATE ============
-interface PersonResult {
-  name: string;
-  items: { name: string; share: number; qty: number; totalShares: number }[];
-  subtotal: number;
-  taxShare: number;
-  serviceShare: number;
-  discountShare: number;
-  totalRaw: number;
-  totalRounded: number;
-}
-
-function calculate(): {
-  results: PersonResult[];
-  billSubtotal: number;
-  grandTotal: number;
-} {
-  const billSubtotal = bill.items.reduce((s, i) => s + i.price * i.qty, 0);
-  const grandTotal = Math.max(
-    0,
-    billSubtotal + bill.tax + bill.service - bill.discount,
-  );
-
-  const results: PersonResult[] = people.map((p) => {
-    const personItems: { name: string; share: number; qty: number; totalShares: number }[] = [];
-    let subtotal = 0;
-    
-    Object.entries(p.items).forEach(([idStr, qty]) => {
-      const iid = Number(idStr);
-      if (qty <= 0) return;
-      const item = bill.items.find((i) => i.id === iid);
-      if (!item) return;
-
-      const totalShares = getItemTotalShares(iid) || 1;
-      const share = (item.price * item.qty) * (qty / totalShares);
-      subtotal += share;
-      personItems.push({ name: item.name || "(item)", share, qty, totalShares });
-    });
-
-    const ratio = billSubtotal > 0 ? subtotal / billSubtotal : 0;
-    const taxShare = bill.tax * ratio;
-    const serviceShare = bill.service * ratio;
-    const discountShare = bill.discount * ratio;
-    const totalRaw = subtotal + taxShare + serviceShare - discountShare;
-    
-    const totalRounded = roundTotal(Math.max(0, totalRaw));
-
-    return {
-      name: p.name || "Tanpa nama",
-      items: personItems,
-      subtotal,
-      taxShare,
-      serviceShare,
-      discountShare,
-      totalRaw,
-      totalRounded,
-    };
-  });
-
-  return { results, billSubtotal, grandTotal };
-}
-
+// Logika hitung dipindah ke ./calc (calculateSplit). Di sini cuma simpan hasil.
 let lastResults: PersonResult[] = [];
 let lastGrandTotal = 0;
 
@@ -855,16 +780,17 @@ function setupBankInputs() {
     bankHtml.style.borderRadius = "8px";
     bankHtml.style.border = "1px solid #E2E8F0";
     bankHtml.innerHTML = `
-      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:#0F172A; font-weight:600;">💳 Detail Rekening Bank (Muncul Paling Atas PDF)</h4>
+      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:#0F172A; font-weight:600;">💳 Detail Pembayaran (Muncul Paling Atas PDF)</h4>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
         <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" style="flex:1; min-width:120px; color:#0F172A;" />
         <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" style="flex:1; min-width:150px; color:#0F172A;" />
         <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" style="flex:1; min-width:150px; color:#0F172A;" />
       </div>
+      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" style="width:100%; margin-top:10px; color:#0F172A;" />
     `;
     $("step-result").insertBefore(bankHtml, $("summary-list"));
-    ["bank-name-input", "bank-acc-input", "bank-holder-input"].forEach((id) =>
-      $(id).addEventListener("input", scheduleSave),
+    ["bank-name-input", "bank-acc-input", "bank-holder-input", "bank-link-input"].forEach(
+      (id) => $(id).addEventListener("input", scheduleSave),
     );
   }
   // Pulihkan data rekening dari sesi tersimpan (kalau ada).
@@ -874,10 +800,53 @@ function setupBankInputs() {
     $<HTMLInputElement>("bank-holder-input").value = savedBank.holder || "";
     savedBank = null;
   }
+  if (payLink) $<HTMLInputElement>("bank-link-input").value = payLink;
 }
 
-// ============ SETTLE-UP + SHARE (disuntik ke #step-result sekali) ============
+// ============ SETTLE-UP + SETTINGS + SHARE (disuntik ke #step-result sekali) ====
 function setupResultExtras() {
+  // Pengaturan pembulatan + rekonsiliasi selisih.
+  if (!$("result-settings")) {
+    const s = document.createElement("div");
+    s.id = "result-settings";
+    s.style.cssText =
+      "background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px;margin-top:16px;font-size:13px;color:#0F172A;";
+    s.innerHTML = `
+      <div style="font-weight:600;margin-bottom:10px;">⚙️ Pengaturan pembulatan</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="round-mode" class="input" style="flex:1;min-width:130px;color:#0F172A;cursor:pointer;">
+          <option value="nearest">Ke terdekat</option>
+          <option value="up">Ke atas</option>
+          <option value="down">Ke bawah</option>
+        </select>
+        <select id="round-to" class="input" style="flex:1;min-width:110px;color:#0F172A;cursor:pointer;">
+          <option value="1000">per 1.000</option>
+          <option value="500">per 500</option>
+          <option value="100">per 100</option>
+          <option value="1">tanpa bulat</option>
+        </select>
+      </div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+        <input type="checkbox" id="round-reconcile" style="width:16px;height:16px;cursor:pointer;" />
+        Samakan total terkumpul = bill (selisih dibebankan ke 1 orang)
+      </label>`;
+    const firstRow = $("step-result").querySelector(".btn-row");
+    if (firstRow) $("step-result").insertBefore(s, firstRow);
+    else $("step-result").appendChild(s);
+    $("round-mode").addEventListener("change", () => {
+      roundCfg.mode = $<HTMLSelectElement>("round-mode").value as RoundMode;
+      renderResult();
+    });
+    $("round-to").addEventListener("change", () => {
+      roundCfg.to = Number($<HTMLSelectElement>("round-to").value) || 1;
+      renderResult();
+    });
+    $("round-reconcile").addEventListener("change", () => {
+      reconcile = $<HTMLInputElement>("round-reconcile").checked;
+      renderResult();
+    });
+  }
+
   if (!$("settle-container")) {
     const wrap = document.createElement("div");
     wrap.id = "settle-container";
@@ -902,9 +871,14 @@ function setupResultExtras() {
     row.id = "result-actions";
     row.className = "btn-row";
     row.style.marginTop = "16px";
-    row.innerHTML = `
-      <button type="button" id="btn-share-wa" class="btn btn-block" style="background:#25D366;color:#fff;font-weight:bold;">📲 Bagikan ke WhatsApp</button>
-      <button type="button" id="btn-copy" class="btn btn-block" style="background:#F1F5F9;color:#0F172A;border:1px solid #E2E8F0;">📋 Salin teks</button>`;
+    const btn = (id: string, label: string, bg: string, fg: string, extra = "") =>
+      `<button type="button" id="${id}" class="btn" style="flex:1;min-width:120px;background:${bg};color:${fg};font-weight:bold;${extra}">${label}</button>`;
+    row.innerHTML =
+      btn("btn-share-wa", "📲 WhatsApp", "#25D366", "#fff") +
+      btn("btn-copy", "📋 Salin teks", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;") +
+      btn("btn-png", "🖼️ PNG", "#0F172A", "#fff") +
+      btn("btn-csv", "⬇️ CSV", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;") +
+      btn("btn-link", "🔗 Salin link", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;");
     const firstRow = $("step-result").querySelector(".btn-row");
     if (firstRow) $("step-result").insertBefore(row, firstRow);
     else $("step-result").appendChild(row);
@@ -915,20 +889,52 @@ function setupResultExtras() {
         "_blank",
       );
     });
-    $("btn-copy").addEventListener("click", async () => {
-      const text = buildShareText();
-      try {
-        await navigator.clipboard.writeText(text);
-        const b = $("btn-copy");
-        const old = b.textContent;
-        b.textContent = "✓ Tersalin!";
-        setTimeout(() => {
-          b.textContent = old;
-        }, 1500);
-      } catch {
-        alert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
+    $("btn-copy").addEventListener("click", () => flashCopy("btn-copy", buildShareText()));
+    $("btn-png").addEventListener("click", downloadPNG);
+    $("btn-csv").addEventListener("click", downloadCSV);
+    $("btn-link").addEventListener("click", () =>
+      flashCopy("btn-link", buildShareLink(), "🔗 Salin link", "✓ Link tersalin!"),
+    );
+  }
+
+  // Checklist "lunas" (delegasi, pasang sekali).
+  if (!summaryPaidBound) {
+    summaryPaidBound = true;
+    $("summary-list").addEventListener("change", (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.dataset.paid !== undefined) {
+        paid[t.dataset.paid] = t.checked;
+        renderResult();
       }
     });
+  }
+}
+
+function syncRoundingControls() {
+  const m = $<HTMLSelectElement>("round-mode");
+  if (m) m.value = roundCfg.mode;
+  const to = $<HTMLSelectElement>("round-to");
+  if (to) to.value = String(roundCfg.to);
+  const rec = $<HTMLInputElement>("round-reconcile");
+  if (rec) rec.checked = reconcile;
+}
+
+// Salin teks ke clipboard + animasi konfirmasi singkat pada tombol.
+async function flashCopy(
+  btnId: string,
+  text: string,
+  base = "📋 Salin teks",
+  done = "✓ Tersalin!",
+) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const b = $(btnId);
+    b.textContent = done;
+    setTimeout(() => {
+      b.textContent = base;
+    }, 1500);
+  } catch {
+    alert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
   }
 }
 
@@ -971,18 +977,27 @@ function renderSettle() {
       .join("")}`;
 }
 
+function capturePayLink(): string {
+  const el = $<HTMLInputElement>("bank-link-input");
+  return el ? el.value.trim() : payLink;
+}
+
 function buildShareText(): string {
   const lines: string[] = ["*Patungan* 🧾"];
   const bank = captureBank();
+  const link = capturePayLink();
   if (bank && (bank.name || bank.acc || bank.holder)) {
     lines.push("", "💳 Transfer ke:");
     if (bank.name) lines.push("Bank " + bank.name);
     if (bank.acc) lines.push(bank.acc);
     if (bank.holder) lines.push("a.n. " + bank.holder);
   }
+  if (link) lines.push("", "🔗 Bayar: " + link);
   lines.push("");
   lastResults.forEach((r) => {
-    lines.push(`👤 *${r.name}* — ${fmtIDR(r.totalRounded)}`);
+    lines.push(
+      `👤 *${r.name}* — ${fmtIDR(r.totalRounded)}${paid[r.name] ? " ✅ LUNAS" : ""}`,
+    );
     r.items.forEach((i) =>
       lines.push(
         `   • ${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}: ${fmtIDR(i.share)}`,
@@ -1018,19 +1033,52 @@ function captureBank(): { name: string; acc: string; holder: string } | null {
   };
 }
 
+// Tangkap mode (Rp/%) + nilai mentah pajak/service/diskon dari DOM, supaya
+// mode "%" tidak hilang saat sesi dipulihkan.
+function captureCharges(): Record<string, { mode: string; val: number }> {
+  const out: Record<string, { mode: string; val: number }> = {};
+  ["tax", "service", "discount"].forEach((k) => {
+    const mode = $<HTMLSelectElement>(`t-${k}-mode`);
+    const val = $<HTMLInputElement>(`t-${k}`);
+    if (mode && val) out[k] = { mode: mode.value, val: Number(val.value) || 0 };
+  });
+  return out;
+}
+
+function applyCharges(charges?: Record<string, { mode: string; val: number }>) {
+  if (!charges) return;
+  ["tax", "service", "discount"].forEach((k) => {
+    const c = charges[k];
+    if (!c) return;
+    const mode = $<HTMLSelectElement>(`t-${k}-mode`);
+    const val = $<HTMLInputElement>(`t-${k}`);
+    if (mode) mode.value = c.mode;
+    if (val) val.value = String(c.val);
+  });
+  updateBillTotals();
+}
+
+function buildState() {
+  return {
+    v: 2,
+    bill,
+    people,
+    nextItemId,
+    nextPersonId,
+    payerName,
+    bank: captureBank(),
+    payLink: capturePayLink(),
+    paid,
+    round: roundCfg,
+    reconcile,
+    charges: captureCharges(),
+    ts: Date.now(),
+  };
+}
+
 function saveState() {
   try {
-    const data = {
-      v: 1,
-      bill,
-      people,
-      nextItemId,
-      nextPersonId,
-      payerName,
-      bank: captureBank(),
-      ts: Date.now(),
-    };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(buildState()));
   } catch {
     /* localStorage bisa tidak tersedia (mode privat) — abaikan */
   }
@@ -1065,8 +1113,16 @@ function restoreSession(s: any) {
     nextPersonId = s.nextPersonId || maxPersonId + 1;
     payerName = s.payerName || "";
     savedBank = s.bank || null;
+    payLink = s.payLink || "";
+    paid = s.paid || {};
+    reconcile = !!s.reconcile;
+    if (s.round && typeof s.round.to === "number") {
+      roundCfg.to = s.round.to;
+      roundCfg.mode = s.round.mode || "nearest";
+    }
 
     renderBillStep();
+    applyCharges(s.charges);
     $("step-bill").classList.remove("hidden");
     if (people.length > 0) {
       renderPeopleStep();
@@ -1132,6 +1188,77 @@ function showRestoreBanner() {
   });
 }
 
+// Render seluruh langkah hasil. Aman dipanggil ulang (saat ganti pembulatan, dll).
+function renderResult() {
+  const { results, grandTotal } = calculateSplit(bill, people);
+  applyReconcileCalc(results, grandTotal, reconcile, payerName);
+  lastResults = results;
+  lastGrandTotal = grandTotal;
+
+  setupBankInputs();
+  setupResultExtras();
+  syncRoundingControls();
+
+  const sumList = $("summary-list");
+  sumList.style.display = "flex";
+  sumList.style.flexDirection = "column";
+  sumList.style.gap = "15px";
+
+  sumList.innerHTML = results
+    .map(
+      (r) => `
+    <div class="summary-row" style="display:flex; flex-direction:column; padding:16px; border:1px solid #E2E8F0; border-radius:12px; background:#FFFFFF; box-shadow:0 1px 3px rgba(0,0,0,0.05); ${paid[r.name] ? "opacity:0.6;" : ""}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:2px dashed #E2E8F0; padding-bottom:8px;">
+        <div style="font-size:16px; font-weight:bold; color:#0F172A;">
+          👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:#D1FAE5;color:#059669;padding:2px 8px;border-radius:6px;margin-left:6px;">LUNAS</span>` : ""}
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748B;cursor:pointer;">
+          <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> Lunas
+        </label>
+      </div>
+
+      <div style="font-size:13px; color:#0F172A; display:flex; flex-direction:column; gap:6px;">
+        ${r.items.map((i) => `
+          <div style="display:flex; justify-content:space-between; color:#0F172A;">
+            <span>• ${escapeHtml(i.name)} ${i.qty < i.totalShares ? `<span style="color:#0F172A; opacity:0.6; font-weight:500;">(${i.qty}/${i.totalShares})</span>` : ''}</span>
+            <span class="mono" style="font-weight:500;">${fmtIDR(i.share)}</span>
+          </div>
+        `).join("")}
+
+        <div style="height:1px; background:#E2E8F0; margin:6px 0;"></div>
+
+        <div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
+        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
+        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
+        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#10B981; font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
+        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.6;"><span>Pembulatan</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
+      </div>
+
+      <div style="margin-top:12px; padding-top:12px; border-top:1px solid #E2E8F0; display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-weight:bold; font-size:14px; color:#0F172A;">TOTAL BAYAR:</span>
+        <span class="mono" style="font-weight:800; font-size:18px; color:#FFFFFF; background:#10B981; padding:6px 14px; border-radius:8px;">${fmtIDR(r.totalRounded)}</span>
+      </div>
+    </div>
+  `,
+    )
+    .join("");
+
+  const totalRounded = results.reduce((s, r) => s + r.totalRounded, 0);
+  const diff = totalRounded - grandTotal;
+  const diffSign = diff > 0 ? "+" : "";
+
+  $("summary-sub").innerHTML = `
+    <div style="background:#FFFFFF; border:1px solid #E2E8F0; padding:12px; border-radius:8px; text-align:center; margin-top:10px; color:#0F172A;">
+      Total tagihan asli: <b>${fmtIDR(grandTotal)}</b><br/>
+      Total terkumpul setelah pembulatan: <b>${fmtIDR(totalRounded)}</b>
+      <span style="opacity:0.7; font-size:12px;">(Selisih: ${diffSign}${fmtIDR(diff)})</span>
+    </div>
+  `;
+
+  renderSettle();
+  scheduleSave();
+}
+
 $("btn-calculate").addEventListener("click", () => {
   if (people.length === 0) {
     alert("Tambah minimal 1 orang dulu");
@@ -1149,93 +1276,37 @@ $("btn-calculate").addEventListener("click", () => {
     )
       return;
   }
-  const { results, grandTotal } = calculate();
-  lastResults = results;
-  lastGrandTotal = grandTotal;
-
-  setupBankInputs();
-
-  const sumList = $("summary-list");
-  sumList.style.display = "flex";
-  sumList.style.flexDirection = "column";
-  sumList.style.gap = "15px";
-  
-  sumList.innerHTML = results
-    .map(
-      (r) => `
-    <div class="summary-row" style="display:flex; flex-direction:column; padding:16px; border:1px solid #E2E8F0; border-radius:12px; background:#FFFFFF; box-shadow:0 1px 3px rgba(0,0,0,0.05);">
-      <div style="font-size:16px; font-weight:bold; color:#0F172A; margin-bottom:10px; border-bottom:2px dashed #E2E8F0; padding-bottom:8px;">
-        👤 ${escapeHtml(r.name)}
-      </div>
-      
-      <div style="font-size:13px; color:#0F172A; display:flex; flex-direction:column; gap:6px;">
-        ${r.items.map((i) => `
-          <div style="display:flex; justify-content:space-between; color:#0F172A;">
-            <span>• ${escapeHtml(i.name)} ${i.qty < i.totalShares ? `<span style="color:#0F172A; opacity:0.6; font-weight:500;">(${i.qty}/${i.totalShares})</span>` : ''}</span>
-            <span class="mono" style="font-weight:500;">${fmtIDR(i.share)}</span>
-          </div>
-        `).join("")}
-        
-        <div style="height:1px; background:#E2E8F0; margin:6px 0;"></div>
-        
-        <div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
-        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
-        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
-        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#10B981; font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
-        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.6;"><span>Pembulatan</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
-      </div>
-      
-      <div style="margin-top:12px; padding-top:12px; border-top:1px solid #E2E8F0; display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-weight:bold; font-size:14px; color:#0F172A;">TOTAL BAYAR:</span>
-        <span class="mono" style="font-weight:800; font-size:18px; color:#FFFFFF; background:#10B981; padding:6px 14px; border-radius:8px;">${fmtIDR(r.totalRounded)}</span>
-      </div>
-    </div>
-  `
-    )
-    .join("");
-
-  const totalRounded = results.reduce((s, r) => s + r.totalRounded, 0);
-  const diff = totalRounded - grandTotal;
-  const diffSign = diff > 0 ? "+" : "";
-  
-  const summarySub = $("summary-sub");
-  summarySub.innerHTML = `
-    <div style="background:#FFFFFF; border:1px solid #E2E8F0; padding:12px; border-radius:8px; text-align:center; margin-top:10px; color:#0F172A;">
-      Total tagihan asli: <b>${fmtIDR(grandTotal)}</b><br/>
-      Total terkumpul setelah pembulatan: <b>${fmtIDR(totalRounded)}</b> 
-      <span style="opacity:0.7; font-size:12px;">(Selisih: ${diffSign}${fmtIDR(diff)})</span>
-    </div>
-  `;
-
-  setupResultExtras();
-  renderSettle();
-  scheduleSave();
+  renderResult();
+  pushHistory();
 
   $("step-result").classList.remove("hidden");
   $("step-result").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// ============ NATIVE BROWSER PRINT TO PDF ============
-$("btn-download").addEventListener("click", () => {
+// ============ STRUK DIGITAL: HTML dipakai bareng PDF (print) & PNG ============
+function buildReceiptHTML(): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString("id-ID", {
     day: "2-digit",
     month: "long",
     year: "numeric",
   });
-  
-  const bName = $<HTMLInputElement>("bank-name-input")?.value.trim();
-  const bAcc = $<HTMLInputElement>("bank-acc-input")?.value.trim();
-  const bHolder = $<HTMLInputElement>("bank-holder-input")?.value.trim();
+
+  const bank = captureBank();
+  const link = capturePayLink();
+  const bName = bank?.name?.trim();
+  const bAcc = bank?.acc?.trim();
+  const bHolder = bank?.holder?.trim();
 
   let bankHtml = "";
-  if (bName || bAcc || bHolder) {
+  if (bName || bAcc || bHolder || link) {
     bankHtml = `
       <div style="background-color: #0F172A; color: #F8FAFC; border-radius: 12px; padding: 20px; margin-bottom: 24px; text-align: center; page-break-inside: avoid; box-shadow: 0 4px 6px rgba(15,23,42,0.1);">
         <div style="font-size: 12px; color: #10B981; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Transfer Pembayaran Ke</div>
         ${bName ? `<div style="font-size: 16px; font-weight: 600; color: #F8FAFC;">Bank ${escapeHtml(bName)}</div>` : ""}
         ${bAcc ? `<div style="font-size: 28px; font-family: monospace; font-weight: 900; margin: 4px 0; color: #10B981; letter-spacing: 2px; user-select: all;">${escapeHtml(bAcc)}</div>` : ""}
         ${bHolder ? `<div style="font-size: 14px; color: #94A3B8; font-weight: 500;">a.n. ${escapeHtml(bHolder)}</div>` : ""}
+        ${link ? `<div style="font-size: 13px; color: #10B981; font-weight: 600; margin-top: 8px; word-break: break-all;">🔗 ${escapeHtml(link)}</div>` : ""}
       </div>
     `;
   }
@@ -1247,6 +1318,7 @@ $("btn-download").addEventListener("click", () => {
       <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; border-bottom: 1px dashed #E2E8F0; padding-bottom: 12px;">
         <div style="background-color: #F1F5F9; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 16px;">👤</div>
         <span style="font-weight: 800; font-size: 18px; color: #0F172A;">${escapeHtml(r.name)}</span>
+        ${paid[r.name] ? `<span style="margin-left:auto; font-size:11px; font-weight:700; background:#D1FAE5; color:#059669; padding:3px 10px; border-radius:6px;">LUNAS</span>` : ""}
       </div>
 
       <div style="font-size: 14px; color: #334155;">
@@ -1259,9 +1331,9 @@ $("btn-download").addEventListener("click", () => {
             <div style="font-family: monospace; font-weight: 500; color: #0F172A;">${fmtIDR(i.share)}</div>
           </div>
         `).join("")}
-          
+
         <div style="height: 1px; background-color: #E2E8F0; margin: 12px 0;"></div>
-        
+
         <div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569; font-weight:600;">
           <div style="flex:1;">Subtotal</div>
           <div style="font-family: monospace;">${fmtIDR(r.subtotal)}</div>
@@ -1271,47 +1343,35 @@ $("btn-download").addEventListener("click", () => {
         ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569;"><div style="flex:1;">Service Charge</div><div style="font-family: monospace;">${fmtIDR(r.serviceShare)}</div></div>` : ""}
         ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#10B981; font-weight: 600;"><div style="flex:1;">Diskon</div><div style="font-family: monospace;">−${fmtIDR(r.discountShare)}</div></div>` : ""}
       </div>
-      
+
       <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E2E8F0; display: flex; justify-content: space-between; align-items: center;">
         <span style="font-weight: 700; font-size: 14px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px;">Total Bayar</span>
         <span style="color: #FFFFFF; background-color: #10B981; padding: 6px 12px; border-radius: 8px; font-size: 18px; font-weight: 900; font-family: monospace; box-shadow: 0 2px 4px rgba(16,185,129,0.2);">${fmtIDR(r.totalRounded)}</span>
       </div>
     </div>
-  `
+  `,
     )
     .join("");
 
   const grandRounded = lastResults.reduce((s, r) => s + r.totalRounded, 0);
 
-  const printContainer = document.createElement("div");
-  printContainer.id = "print-container";
-  printContainer.style.maxWidth = "600px";
-  printContainer.style.margin = "0 auto";
-  printContainer.style.padding = "24px 20px";
-  printContainer.style.backgroundColor = "#F8FAFC"; 
-  printContainer.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-  printContainer.style.lineHeight = "1.5";
-  printContainer.style.color = "#0F172A";
-
-  printContainer.innerHTML = `
+  return `
     <div style="border-bottom: 2px solid #10B981; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
       <div>
         <div style="font-size: 32px; font-weight: 900; color: #0F172A; letter-spacing: -1px; line-height: 1;">patungan.</div>
-        <a href="https://astro-patungan.vercel.app/" target="_blank" style="color: #10B981; text-decoration: none; font-size: 13px; font-weight: bold; margin-top: 6px; display: inline-block;">
-          🔗 astro-patungan.vercel.app
-        </a>
+        <span style="color: #10B981; font-size: 13px; font-weight: bold; margin-top: 6px; display: inline-block;">🔗 astro-patungan.vercel.app</span>
       </div>
       <div style="text-align: right;">
         <div style="font-size: 12px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 1px;">Struk Digital</div>
         <div style="font-size: 14px; color: #0F172A; font-weight: 600; margin-top: 2px;">${dateStr}</div>
       </div>
     </div>
-    
+
     ${bankHtml}
-    
+
     <div style="margin-bottom: 8px; font-weight: bold; font-size: 16px; color: #0F172A;">Rincian Patungan:</div>
     ${personHtml}
-    
+
     <div style="margin-top: 24px; padding: 20px; background-color: #F8FAFC; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border: 2px solid #10B981; page-break-inside: avoid;">
       <div>
         <div style="font-weight: 800; font-size: 18px; color: #0F172A;">Total Terkumpul</div>
@@ -1325,35 +1385,150 @@ $("btn-download").addEventListener("click", () => {
       <div style="margin-top: 4px;">&copy; dyudhani 2026 | No server, 100% aman.</div>
     </div>
   `;
+}
 
+function buildReceiptNode(): HTMLElement {
+  const c = document.createElement("div");
+  c.id = "print-container";
+  c.style.cssText =
+    "max-width:600px;margin:0 auto;padding:24px 20px;background-color:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#0F172A;";
+  c.innerHTML = buildReceiptHTML();
+  return c;
+}
+
+// ===== PDF via print =====
+$("btn-download").addEventListener("click", () => {
+  const printContainer = buildReceiptNode();
   const printStyle = document.createElement("style");
   printStyle.id = "print-style";
   printStyle.innerHTML = `
     @media print {
-      body > *:not(#print-container) {
-        display: none !important;
-      }
-      #print-container {
-        display: block !important;
-      }
-      * {
-        -webkit-print-color-adjust: exact !important;
-        print-color-adjust: exact !important;
-      }
-      @page {
-        margin: 15mm;
-      }
-    }
-  `;
-
+      body > *:not(#print-container) { display: none !important; }
+      #print-container { display: block !important; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      @page { margin: 15mm; }
+    }`;
   document.head.appendChild(printStyle);
   document.body.appendChild(printContainer);
-
   window.print();
-
   document.body.removeChild(printContainer);
   document.head.removeChild(printStyle);
 });
+
+// ===== PNG (html-to-image) =====
+async function downloadPNG() {
+  if (typeof htmlToImage === "undefined") {
+    alert("Modul gambar belum termuat. Cek koneksi lalu coba lagi.");
+    return;
+  }
+  const node = buildReceiptNode();
+  node.style.position = "fixed";
+  node.style.left = "-99999px";
+  node.style.top = "0";
+  document.body.appendChild(node);
+  try {
+    await (document as any).fonts?.ready;
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const dataUrl = await htmlToImage.toPng(node, {
+      pixelRatio: 2,
+      backgroundColor: "#F8FAFC",
+      cacheBust: true,
+    });
+    const a = document.createElement("a");
+    a.download = `patungan-${new Date().toISOString().slice(0, 10)}.png`;
+    a.href = dataUrl;
+    a.click();
+  } catch (e) {
+    console.error(e);
+    alert("Gagal membuat PNG. Coba lagi.");
+  } finally {
+    document.body.removeChild(node);
+  }
+}
+
+// ===== CSV =====
+function downloadCSV() {
+  const rows: (string | number)[][] = [
+    ["Nama", "Pesanan", "Subtotal", "Pajak", "Service", "Diskon", "Total", "Status"],
+  ];
+  lastResults.forEach((r) => {
+    const items = r.items
+      .map(
+        (i) =>
+          `${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}=${Math.round(i.share)}`,
+      )
+      .join("; ");
+    rows.push([
+      r.name,
+      items,
+      Math.round(r.subtotal),
+      Math.round(r.taxShare),
+      Math.round(r.serviceShare),
+      Math.round(r.discountShare),
+      r.totalRounded,
+      paid[r.name] ? "LUNAS" : "Belum",
+    ]);
+  });
+  const grand = lastResults.reduce((s, r) => s + r.totalRounded, 0);
+  rows.push([]);
+  rows.push(["Total Terkumpul", "", "", "", "", "", grand, ""]);
+
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + csv], {
+    type: "text/csv;charset=utf-8;",
+  });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `patungan-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ===== SHARE VIA LINK (encode state ke URL hash, tetap offline) =====
+function buildShareLink(): string {
+  const json = JSON.stringify(buildState());
+  const b64 = btoa(unescape(encodeURIComponent(json)));
+  return location.origin + location.pathname + "#s=" + b64;
+}
+
+function tryLoadFromHash(): boolean {
+  const m = location.hash.match(/[#&]s=([^&]+)/);
+  if (!m) return false;
+  try {
+    const json = decodeURIComponent(escape(atob(m[1])));
+    const s = JSON.parse(json);
+    history.replaceState(null, "", location.pathname); // bersihkan hash
+    if (!s || !s.bill) return false;
+    if (confirm("Buka patungan dari link yang dibagikan?")) {
+      restoreSession(s);
+    }
+    return true;
+  } catch (e) {
+    console.error(e);
+    return false;
+  }
+}
+
+// ===== RIWAYAT PATUNGAN (beberapa sesi lama) =====
+const HIST_KEY = "patungan_history_v1";
+function loadHistory(): any[] {
+  try {
+    return JSON.parse(localStorage.getItem(HIST_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function pushHistory() {
+  try {
+    const grand = lastResults.reduce((s, r) => s + r.totalRounded, 0);
+    if (grand <= 0) return;
+    const list = loadHistory();
+    list.unshift({ ...buildState(), grand, peopleCount: people.length });
+    localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, 20)));
+  } catch {
+    /* noop */
+  }
+}
 
 // ============ RESET ============
 $("btn-reset").addEventListener("click", () => {
@@ -1372,7 +1547,44 @@ $("btn-reset").addEventListener("click", () => {
   window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
+// ============ DARK MODE TOGGLE (#12) ============
+const themeBtn = document.createElement("button");
+themeBtn.type = "button";
+themeBtn.id = "theme-toggle";
+themeBtn.style.cssText =
+  "margin-left:auto;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;color:var(--ink);line-height:1;";
+function syncThemeBtn() {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  themeBtn.textContent = dark ? "☀️" : "🌙";
+  themeBtn.title = dark ? "Mode terang" : "Mode gelap";
+}
+themeBtn.addEventListener("click", () => {
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  try {
+    if (dark) {
+      document.documentElement.removeAttribute("data-theme");
+      localStorage.setItem("patungan_theme", "light");
+    } else {
+      document.documentElement.setAttribute("data-theme", "dark");
+      localStorage.setItem("patungan_theme", "dark");
+    }
+  } catch {
+    /* noop */
+  }
+  syncThemeBtn();
+});
+document.querySelector(".brand")?.appendChild(themeBtn);
+syncThemeBtn();
+
+// ============ PWA: daftarkan service worker (#11) ============
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
 // ============ INIT ============
-showRestoreBanner();
+// Prioritas: link share → kalau tidak ada, tawarkan pulihkan sesi tersimpan.
+if (!tryLoadFromHash()) showRestoreBanner();
 
 void lastGrandTotal;
