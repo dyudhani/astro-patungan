@@ -1,0 +1,19 @@
+{
+  "name": "patungan. — Split Bill",
+  "short_name": "patungan.",
+  "description": "Split bill dari foto struk. Cepat, tanpa daftar, tanpa server, 100% offline.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#10b981",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
