@@ -1,6 +1,6 @@
 /**
- * Parser untuk teks struk Indonesia & Inggris.
- * Heuristik-based — bukan AI, tapi cukup ampuh untuk format struk umum.
+ * Parser for Indonesian & English receipt text.
+ * Heuristic-based — not AI, but effective for common receipt formats.
  */
 
 export interface ParsedItem {
@@ -17,6 +17,8 @@ export interface ParsedReceipt {
   service: number;
   discount: number;
   total: number;
+  /** Number-consistency warnings (e.g. item total vs. receipt total far apart) — a sign OCR may have misread something. */
+  warnings: string[];
 }
 
 export function parseIDR(s: string): number | null {
@@ -72,7 +74,7 @@ const SKIP_KEYWORDS = [
   'terima kasih', 'thank you', 'thanks',
   'npwp', 'nomor', 'no.', 'no :', 'no:',
   'rounding', 'pembulatan',
-  // Noise umum di struk POS Indonesia (Moka, Pawoon, Olsera, Majoo, Qasir, iSeller, ESB, GoBiz)
+  // Common noise on Indonesian POS receipts (Moka, Pawoon, Olsera, Majoo, Qasir, iSeller, ESB, GoBiz)
   'poin', 'point', 'member', 'membership', 'saldo',
   'powered', 'www', 'http', '.com', 'telp', 'telepon', 'hotline',
   'cabang', 'outlet', 'alamat', 'gerai',
@@ -81,20 +83,41 @@ const SKIP_KEYWORDS = [
   'dine in', 'dine-in', 'take away', 'takeaway', 'pesanan diterima'
 ];
 
-// Logika Cerdas: Mencegah tabrakan kata (Contoh: "Tipat" vs "Tip")
+// A keyword containing anything other than [a-z0-9] is a multi-word phrase
+// or has punctuation (e.g. "sub total", "dine-in", "no.") — loose substring
+// matching on those is safe, since a menu item accidentally containing that
+// exact phrase is effectively impossible.
+const PHRASE_OR_PUNCT_KEYWORD = /[^a-z0-9]/i;
+
+// Smart matching: avoid word collisions (e.g. "Tipat" vs "Tip")
 function isKeywordMatch(text: string, kw: string): boolean {
   const lc = text.toLowerCase();
-  
-  // Untuk kata kunci super pendek, gunakan Exact Word Boundary (\b)
-  if (['tip', 'tax', 'vat', 'gst', 'svc', 'pb1', 'pax', 'due', 'card', 'edc'].includes(kw)) {
-    return new RegExp(`\\b${kw}\\b`, 'i').test(lc);
-  }
-  
-  // Cegah kata "total" bertabrakan dengan "subtotal"
+
+  // Prevent "total" from colliding with "subtotal"
   if (kw === 'total') {
     return new RegExp(`\\btotal\\b`, 'i').test(lc) && !lc.includes('subtotal') && !lc.includes('sub total');
   }
-  
+
+  // "jam" (hour/time in Indonesian) is only metadata if this is a TIME LABEL
+  // line ("Jam : 22:12"), not a word inside a menu name ("1 NEW PACKAGE VIP
+  // 2 JAM" = a 2-hour package). Without this exception, every
+  // billiard/karaoke/futsal item whose name contains "... N JAM" gets
+  // skipped and disappears entirely from the order list.
+  if (kw === 'jam') {
+    return /\bjam\b\s*:?\s*\d{1,2}:\d{2}/i.test(lc) || /^jam\b/i.test(lc.trim());
+  }
+
+  // Every other single-word keyword ALWAYS uses word boundaries (\b).
+  // Loose substring matching on a lone word is exactly what silently
+  // deleted real menu items before this rule existed: "2 JAM" (jam),
+  // "Nasi Goreng BILLzard" (bill), "VegeTABLE Fried Rice" (table),
+  // "CASHew Chicken" (cash), "Es DANA Kelapa" (dana), "OverTIME Burger"
+  // (time), "Nasi MEJA Rames" (meja) — all vanished from the order list
+  // before word-boundary matching was applied.
+  if (!PHRASE_OR_PUNCT_KEYWORD.test(kw)) {
+    return new RegExp(`\\b${kw}\\b`, 'i').test(lc);
+  }
+
   return lc.includes(kw);
 }
 
@@ -114,17 +137,19 @@ function cleanName(raw: string): string {
   return name;
 }
 
+// Merge numbers OCR split with a stray space (e.g. "17 700" -> "17700").
+// IMPORTANT FIX: this used to be written [0]{3}, so 700 never merged.
+function mergeOcrSplitDigits(s: string): string {
+  return s.replace(/(\d+)[.,\s]+(\d{3})(?!\d)/g, '$1$2');
+}
+
 function findAmount(lines: string[], keywords: string[]): number {
   for (const line of lines) {
     const isMatch = keywords.some((kw) => isKeywordMatch(line, kw));
     if (isMatch) {
-      // 1. Bersihkan tulisan persen (seperti 10%) agar tidak ditangkap sebagai nominal
-      let cleanedLine = line.replace(/\b\d+\s*%/g, '');
-      
-      // 2. Gabungkan angka yang terputus spasi gara-gar OCR (misal "17 700" jadi "17700")
-      // FIX PENTING: Dulu \d{3} ditulis [0]{3} sehingga 700 tidak tergabung.
-      cleanedLine = cleanedLine.replace(/(\d+)[.,\s]+(\d{3})(?!\d)/g, '$1$2');
-      
+      // Strip percentage text (e.g. 10%) so it isn't captured as an amount
+      const cleanedLine = mergeOcrSplitDigits(line.replace(/\b\d+\s*%/g, ''));
+
       const matches = cleanedLine.match(/[\d.,]+/g);
       if (matches && matches.length > 0) {
         for (let i = matches.length - 1; i >= 0; i--) {
@@ -138,16 +163,16 @@ function findAmount(lines: string[], keywords: string[]): number {
 }
 
 function tryParseItemLine(line: string): ParsedItem | null {
-  // Gabungkan typo spasi OCR pada nominal harga
-  const trimmed = line.trim().replace(/(\d+)[.,\s]+(\d{3})(?!\d)/g, '$1$2');
-  
+  const trimmed = mergeOcrSplitDigits(line.trim());
+
   if (trimmed.length < 3) return null;
   if (looksLikeMetadata(trimmed)) return null;
 
   if (/^\(.*\)$/.test(trimmed)) return null;
 
-  // Skip baris tanggal / jam / nomor telepon — sering jadi "harga hantu" saat OCR.
-  // Hanya di-skip kalau hurufnya sedikit (bukan nama menu yang kebetulan ada angka).
+  // Skip date / time / phone-number lines — these often become "ghost prices"
+  // during OCR. Only skip when there are few letters (not a menu name that
+  // happens to contain digits).
   const looksLikeDateTime =
     /\b\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{2,4})?\b/.test(trimmed) ||
     /\b\d{1,2}:\d{2}\b/.test(trimmed);
@@ -159,9 +184,9 @@ function tryParseItemLine(line: string): ParsedItem | null {
     return null;
   }
 
-  // Pola struk minimarket 4 kolom: "NAMA  QTY  HARGA  TOTAL" (Circle K, Indomaret,
-  // Alfamart, dll). Nama boleh mengandung angka (mis. "VUSE GO 700"), jadi kita
-  // ambil 3 angka terakhir sebagai qty/harga/total dan sisanya jadi nama.
+  // Convenience-store 4-column layout: "NAME  QTY  PRICE  TOTAL" (Circle K,
+  // Indomaret, Alfamart, etc). The name may contain digits (e.g. "VUSE GO
+  // 700"), so we take the last 3 numbers as qty/price/total and the rest as the name.
   const trailing3 = trimmed.match(/(\d{1,3})\s+([\d.,]+)\s+([\d.,]+)\s*$/);
   if (trailing3) {
     const q = parseInt(trailing3[1], 10);
@@ -298,9 +323,9 @@ export function parseReceipt(rawText: string): ParsedReceipt {
   let finalService = service;
   let total = totalFound > 0 ? totalFound : subtotal + tax + service - discount;
 
-  // Deteksi PAJAK SUDAH TERMASUK harga (mis. Circle K: "BKP SUDAH TERMASUK PPN").
-  // Kalau jumlah harga item ≈ grand total, berarti pajak/service tidak ditambah
-  // lagi di atasnya — kalau tetap ditambah, total jadi dobel.
+  // Detect TAX-ALREADY-INCLUDED prices (e.g. Circle K: "BKP SUDAH TERMASUK PPN").
+  // If the item total roughly equals the grand total, tax/service aren't
+  // added on top — if we still added them, the total would double-count.
   const base = calculatedSubtotal > 0 ? calculatedSubtotal : subtotal;
   const taxIncludedKeyword = /termasuk\s+(ppn|pajak|tax)|sudah\s+termasuk|incl(usive)?/i.test(
     rawText,
@@ -315,12 +340,44 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     subtotal = base;
     total = totalFound;
   } else if (taxIncludedKeyword && base > 0 && (finalTax > 0 || finalService > 0)) {
-    // Ada penanda "termasuk PPN" tapi angka tidak konklusif — aman-kan dgn nol-kan
-    // pajak hanya jika item sudah mendekati total yang ditemukan.
+    // Found a "tax included" marker but the numbers aren't conclusive — play
+    // it safe and zero out tax only if the items already come close to the found total.
     if (totalFound > 0 && Math.abs(base - totalFound) / totalFound < 0.06) {
       finalTax = 0;
       finalService = 0;
     }
+  }
+
+  // Sanity check: if the numbers we read don't add up, OCR almost certainly
+  // misread something (garbled name/number, or the "Subtotal/Tax/TOTAL"
+  // lines failed to be detected at all). Dot-matrix POS printer fonts cause
+  // this a lot even on a sharp, straight photo — tell the user to check
+  // manually instead of silently splitting the bill with wrong numbers.
+  const warnings: string[] = [];
+  const fmtNum = (n: number) => Math.round(n).toLocaleString("id-ID");
+
+  if (totalFound > 0 && calculatedSubtotal > 0) {
+    const expectedTotal = calculatedSubtotal + finalTax + finalService - discount;
+    if (Math.abs(expectedTotal - totalFound) / totalFound > 0.08) {
+      warnings.push(
+        `Total dari rincian item (Rp ${fmtNum(expectedTotal)}) beda jauh dari TOTAL di struk (Rp ${fmtNum(totalFound)}) — kemungkinan ada angka yang salah kebaca, cek manual.`,
+      );
+    }
+  }
+  if (subtotalFound > 0 && calculatedSubtotal > 0) {
+    // The receipt's Subtotal is usually already net of discount, so compare
+    // net (not the raw item sum) so a legitimate discount isn't mistaken for a misread.
+    const netCalculated = calculatedSubtotal - discount;
+    if (Math.abs(netCalculated - subtotalFound) / subtotalFound > 0.08) {
+      warnings.push(
+        `Jumlah semua item (Rp ${fmtNum(netCalculated)}) tidak cocok dengan Subtotal di struk (Rp ${fmtNum(subtotalFound)}) — kemungkinan ada item yang salah kebaca.`,
+      );
+    }
+  }
+  if (totalFound === 0 && subtotalFound === 0 && items.length > 0) {
+    warnings.push(
+      `Baris "Subtotal/Total" tidak terbaca dari struk — isi manual di langkah berikutnya.`,
+    );
   }
 
   return {
@@ -330,5 +387,6 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     service: finalService,
     discount,
     total,
+    warnings,
   };
 }
