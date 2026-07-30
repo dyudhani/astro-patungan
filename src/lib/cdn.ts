@@ -11,20 +11,49 @@ interface ScriptSpec {
 
 const loading = new Map<string, Promise<void>>();
 
-function loadScript({ src, integrity }: ScriptSpec): Promise<void> {
-  const existing = loading.get(src);
-  if (existing) return existing;
-
-  const promise = new Promise<void>((resolve, reject) => {
+function loadScriptOnce(src: string, integrity: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const el = document.createElement("script");
     el.src = src;
     el.integrity = integrity;
     el.crossOrigin = "anonymous";
     el.onload = () => resolve();
-    el.onerror = () => reject(new Error(`Gagal memuat ${src}`));
+    el.onerror = () => {
+      el.remove();
+      reject(new Error(`Gagal memuat ${src}`));
+    };
     document.head.appendChild(el);
   });
-  loading.set(src, promise);
+}
+
+const RETRY_DELAYS_MS = [500, 1500];
+
+// Retries a couple of times before giving up — the load only happens the
+// moment a user taps scan/export, often on flaky venue wifi, so a single
+// transient blip shouldn't need a full page reload to recover from.
+async function loadScriptWithRetry(spec: ScriptSpec): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await loadScriptOnce(spec.src, spec.integrity);
+      return;
+    } catch (err) {
+      if (attempt >= RETRY_DELAYS_MS.length) throw err;
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
+function loadScript(spec: ScriptSpec): Promise<void> {
+  const existing = loading.get(spec.src);
+  if (existing) return existing;
+
+  const promise = loadScriptWithRetry(spec);
+  loading.set(spec.src, promise);
+  // A failed load (even after retries) must NOT stay cached — otherwise
+  // every future attempt (e.g. clicking "Scan ulang" again) instantly
+  // replays the same stale rejection forever, without ever touching the
+  // network again, instead of actually retrying.
+  promise.catch(() => loading.delete(spec.src));
   return promise;
 }
 
