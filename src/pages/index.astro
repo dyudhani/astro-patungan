@@ -92,6 +92,8 @@ import Layout from "../layouts/Layout.astro";
         Penting: Sesuaikan Harga Total & Satuan jika ada yang salah baca.
       </p>
 
+      <div id="scan-warning"></div>
+
       <div id="items-list"></div>
 
       <button
@@ -113,6 +115,7 @@ import Layout from "../layouts/Layout.astro";
             <select
               id="t-tax-mode"
               class="input"
+              aria-label="Mode pajak: Rupiah atau persen"
               style="padding: 6px; width: 65px; text-align: center; cursor: pointer; color: var(--ink);"
             >
               <option value="nominal">Rp</option>
@@ -122,6 +125,7 @@ import Layout from "../layouts/Layout.astro";
               type="number"
               class="input mono"
               id="t-tax"
+              aria-label="Pajak (Tax)"
               style="max-width: 120px; text-align: right; padding: 6px 10px;"
             />
           </div>
@@ -143,6 +147,7 @@ import Layout from "../layouts/Layout.astro";
             <select
               id="t-service-mode"
               class="input"
+              aria-label="Mode service charge: Rupiah atau persen"
               style="padding: 6px; width: 65px; text-align: center; cursor: pointer; color: var(--ink);"
             >
               <option value="nominal">Rp</option>
@@ -152,6 +157,7 @@ import Layout from "../layouts/Layout.astro";
               type="number"
               class="input mono"
               id="t-service"
+              aria-label="Service Charge"
               style="max-width: 120px; text-align: right; padding: 6px 10px;"
             />
           </div>
@@ -173,6 +179,7 @@ import Layout from "../layouts/Layout.astro";
             <select
               id="t-discount-mode"
               class="input"
+              aria-label="Mode diskon: Rupiah atau persen"
               style="padding: 6px; width: 65px; text-align: center; cursor: pointer; color: var(--ink);"
             >
               <option value="nominal">Rp</option>
@@ -182,6 +189,7 @@ import Layout from "../layouts/Layout.astro";
               type="number"
               class="input mono"
               id="t-discount"
+              aria-label="Diskon"
               style="max-width: 120px; text-align: right; padding: 6px 10px;"
             />
           </div>
@@ -226,6 +234,7 @@ import Layout from "../layouts/Layout.astro";
           class="input"
           id="new-person"
           placeholder="Ketik nama (cth. Andi)"
+          aria-label="Nama teman baru"
         />
         <button
           class="btn btn-secondary"
