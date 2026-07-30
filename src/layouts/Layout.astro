@@ -14,11 +14,9 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       name="description"
       content="Split bill dari foto struk. Cepat, tanpa daftar, tanpa simpan data, tanpa AI."
     />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#10b981" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -35,14 +33,12 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;500;700&family=Inter+Tight:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <script
-      is:inline
-      src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"
-    ></script>
-    <script
-      is:inline
-      src="https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js"
-    ></script>
+    <!--
+      Tesseract.js & html-to-image used to be loaded here eagerly on every
+      page load. They're now lazy-loaded on demand from ./src/lib/cdn.ts,
+      right before OCR scanning / PNG export actually run — most visitors
+      never trigger either, so this saves a multi-MB download for them.
+    -->
     <script is:inline>
       // Pakai tema gelap secepatnya supaya tidak ada kedipan (flash) saat load.
       try {
