@@ -1,4 +1,4 @@
-// Tipe data inti untuk perhitungan patungan.
+// Core data types for the bill-splitting calculation.
 
 export interface BillItem {
   id: number;
@@ -18,7 +18,7 @@ export interface Bill {
 export interface Person {
   id: number;
   name: string;
-  /** Map itemId -> jumlah porsi yang diambil orang ini. */
+  /** Map itemId -> number of shares this person took. */
   items: Record<number, number>;
 }
 
