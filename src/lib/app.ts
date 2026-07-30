@@ -1,7 +1,7 @@
 import { parseReceipt } from "./parseReceipt";
 import type { Bill, BillItem, Person, PersonResult } from "./types";
-import { $, escapeHtml } from "./dom";
-import { fmtIDR, roundCfg, csvCell, type RoundMode } from "./format";
+import { $, escapeHtml, triggerDownload, downloadBlob } from "./dom";
+import { fmtIDR, roundCfg, type RoundMode } from "./format";
 import {
   itemSharersCount,
   itemTotalShares,
@@ -9,8 +9,19 @@ import {
   applyReconcile as applyReconcileCalc,
 } from "./calc";
 import { recognizeReceipt } from "./ocr";
+import { loadHtmlToImage } from "./cdn";
+import { buildReceiptNode, type BankInfo } from "./receipt";
+import {
+  buildShareText,
+  buildCsv,
+  buildShareLink as encodeShareLink,
+  decodeShareState,
+  extractShareHash,
+} from "./share";
+import { setupThemeToggle } from "./theme";
+import { registerServiceWorker } from "./pwa";
 
-// html-to-image via CDN (untuk export PNG).
+// html-to-image via CDN (for PNG export).
 declare const htmlToImage: {
   toPng: (node: HTMLElement, opts?: any) => Promise<string>;
 };
@@ -21,15 +32,15 @@ let people: Person[] = [];
 let nextItemId = 1;
 let nextPersonId = 1;
 let selectedFile: File | null = null;
-let payerName = ""; // siapa yang nalangin (settle-up)
+let payerName = ""; // who fronted the money (settle-up)
 let savedBank: { name: string; acc: string; holder: string } | null = null;
-let rotation = 0; // rotasi gambar struk (0/90/180/270) untuk foto miring
-let paid: Record<string, boolean> = {}; // checklist "sudah bayar" per nama
-let payLink = ""; // link pembayaran (QRIS/e-wallet)
-let reconcile = false; // samakan total terkumpul ke bill (selisih ke 1 orang)
-let summaryPaidBound = false; // sudah pasang listener checkbox "lunas"?
+let rotation = 0; // receipt image rotation (0/90/180/270) for tilted photos
+let paid: Record<string, boolean> = {}; // "paid" checklist per name
+let payLink = ""; // payment link (QRIS/e-wallet)
+let reconcile = false; // make the collected total match the bill (diff goes to 1 person)
+let summaryPaidBound = false; // has the "paid" checkbox listener been attached?
 
-// roundTotal & roundCfg → ./format ; perhitungan → ./calc ; OCR → ./ocr
+// roundTotal & roundCfg → ./format ; calculations → ./calc ; OCR → ./ocr
 
 // ============ STEP 1: UPLOAD ============
 const dropzone = $<HTMLLabelElement>("dropzone");
@@ -45,7 +56,27 @@ const progressWrap = $("progress-wrap");
 const progressBar = $("progress-bar");
 const progressText = $("progress-text");
 
-// Tombol putar 90° untuk foto struk yang miring/sideways (disuntik ke #preview).
+// Show parseReceipt's number-consistency warnings (e.g. item total vs.
+// receipt total far apart) — so the user checks manually before splitting
+// the bill, instead of silently using misread numbers.
+//
+// Rendered into #scan-warning INSIDE step-bill (not step-upload's
+// uploadError) on purpose: right after a scan we auto-scroll to step-bill
+// with `scrollIntoView({ block: "start" })`, which pins step-bill to the top
+// of the viewport — anything above it (like uploadError, still in
+// step-upload) ends up scrolled out of view and the user never sees it.
+function renderScanWarnings(warnings: string[]) {
+  const el = $("scan-warning");
+  if (warnings.length === 0) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = `<div class="info">⚠️ <b>Cek manual sebelum lanjut:</b><br/>${warnings
+    .map((w) => "• " + escapeHtml(w))
+    .join("<br/>")}</div>`;
+}
+
+// 90° rotate button for tilted/sideways receipt photos (injected into #preview).
 const rotateBtn = document.createElement("button");
 rotateBtn.type = "button";
 rotateBtn.id = "preview-rotate";
@@ -62,8 +93,8 @@ rotateBtn.addEventListener("click", (e) => {
   previewImg.style.transformOrigin = "center";
 });
 
-// ============ KAMERA LANGSUNG + TEMPEL TEKS (disuntik ke #step-upload) ============
-// Input tersembunyi dgn capture=environment → buka kamera belakang langsung di HP.
+// ============ DIRECT CAMERA + PASTE TEXT (injected into #step-upload) ============
+// Hidden input with capture=environment → opens the back camera directly on phones.
 const camInput = document.createElement("input");
 camInput.type = "file";
 camInput.accept = "image/*";
@@ -88,7 +119,7 @@ pastePanel.id = "paste-panel";
 pastePanel.className = "hidden";
 pastePanel.style.cssText = "margin-top:10px;";
 pastePanel.innerHTML = `
-  <textarea id="paste-text" class="input" rows="6" placeholder="Tempel teks struk di sini — tiap baris: nama + harga (mis. 'Es Teh 8.000')..." style="width:100%; font-family:var(--mono); font-size:13px; line-height:1.5;"></textarea>
+  <textarea id="paste-text" class="input" rows="6" placeholder="Tempel teks struk di sini — tiap baris: nama + harga (mis. 'Es Teh 8.000')..." aria-label="Teks struk" style="width:100%; font-family:var(--mono); font-size:13px; line-height:1.5;"></textarea>
   <button type="button" id="btn-parse-text" class="btn btn-primary btn-block" style="margin-top:8px;">Proses teks → daftar pesanan</button>`;
 btnSkip.parentElement?.appendChild(pastePanel);
 
@@ -119,13 +150,14 @@ $("btn-parse-text").addEventListener("click", () => {
   };
   if (bill.items.length === 0)
     alert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
+  renderScanWarnings(parsed.warnings);
   pastePanel.classList.add("hidden");
   renderBillStep();
   $("step-bill").classList.remove("hidden");
   $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// ============ BAGI RATA TOTAL SAJA (tanpa rincian item) ============
+// ============ SPLIT TOTAL EVENLY ONLY (no item breakdown) ============
 const totalOnlyRow = document.createElement("div");
 totalOnlyRow.style.cssText = "margin-top:8px;";
 totalOnlyRow.innerHTML = `<button type="button" id="btn-total-only" class="btn btn-secondary btn-block" style="font-size:13px;">💸 Bagi rata total saja (tanpa rincian)</button>`;
@@ -137,9 +169,9 @@ totalOnlyPanel.className = "hidden";
 totalOnlyPanel.style.cssText =
   "margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;";
 totalOnlyPanel.innerHTML = `
-  <input type="number" id="to-total" class="input mono" placeholder="Total bill (Rp)" style="flex:2; min-width:140px;" />
-  <input type="number" id="to-people" class="input mono" placeholder="Jumlah orang" min="1" value="2" style="flex:1; min-width:100px;" />
-  <button type="button" id="to-go" class="btn btn-primary" style="flex:1; min-width:100px;">Bagi rata</button>`;
+  <input type="number" id="to-total" class="input mono" placeholder="Total bill (Rp)" aria-label="Total bill (Rp)" style="width:100%;" />
+  <textarea id="to-names" class="input" rows="2" placeholder="Nama teman, pisahkan dengan koma (mis: Andi, Budi, Citra)" aria-label="Nama teman" style="width:100%; margin-top:8px; font-family:inherit;"></textarea>
+  <button type="button" id="to-go" class="btn btn-primary btn-block" style="margin-top:8px;">Bagi rata</button>`;
 btnSkip.parentElement?.appendChild(totalOnlyPanel);
 
 $("btn-total-only").addEventListener("click", () =>
@@ -147,12 +179,16 @@ $("btn-total-only").addEventListener("click", () =>
 );
 $("to-go").addEventListener("click", () => {
   const total = Math.max(0, Number($<HTMLInputElement>("to-total").value) || 0);
-  const n = Math.max(
-    1,
-    Math.floor(Number($<HTMLInputElement>("to-people").value) || 1),
-  );
+  const names = $<HTMLTextAreaElement>("to-names")
+    .value.split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
   if (total <= 0) {
     alert("Isi total bill dulu.");
+    return;
+  }
+  if (names.length === 0) {
+    alert("Isi nama teman dulu, pisahkan dengan koma (mis: Andi, Budi, Citra).");
     return;
   }
   bill = {
@@ -162,9 +198,11 @@ $("to-go").addEventListener("click", () => {
     discount: 0,
   };
   const iid = bill.items[0].id;
-  people = [];
-  for (let i = 1; i <= n; i++)
-    people.push({ id: nextPersonId++, name: `Orang ${i}`, items: { [iid]: 1 } });
+  people = names.map((name) => ({
+    id: nextPersonId++,
+    name,
+    items: { [iid]: 1 },
+  }));
   totalOnlyPanel.classList.add("hidden");
   renderBillStep();
   renderPeopleStep();
@@ -173,7 +211,7 @@ $("to-go").addEventListener("click", () => {
   $("step-people").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// ============ RIWAYAT PATUNGAN (UI) ============
+// ============ BILL-SPLIT HISTORY (UI) ============
 const histRow = document.createElement("div");
 histRow.style.cssText = "margin-top:8px;";
 histRow.innerHTML = `<button type="button" id="btn-history" class="btn btn-secondary btn-block" style="font-size:13px;">🕘 Riwayat patungan</button>`;
@@ -303,7 +341,7 @@ function setProgress(pct: number, text: string) {
   progressText.textContent = text;
 }
 
-// OCR (preprocessing + Tesseract dual-pass) dipindah ke ./ocr.ts → recognizeReceipt
+// OCR (preprocessing + Tesseract dual-pass) moved to ./ocr.ts → recognizeReceipt
 
 btnScan.addEventListener("click", async () => {
   if (!selectedFile) return;
@@ -335,6 +373,7 @@ btnScan.addEventListener("click", async () => {
     if (bill.items.length === 0) {
       uploadError.innerHTML = `<div class="info">⚠️ OCR tidak menemukan item yang jelas. Tambah item manual di langkah berikutnya, atau coba foto yang lebih terang & lurus.</div>`;
     }
+    renderScanWarnings(parsed.warnings);
 
     renderBillStep();
     $("step-bill").classList.remove("hidden");
@@ -372,30 +411,30 @@ function renderBillStep() {
 
     row.innerHTML = `
       <div style="display:flex; gap:6px; width: 100%; align-items:center;">
-        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" style="flex:1; color:#0F172A; font-weight:600;" />
-        <button data-move="up" data-id="${item.id}" type="button" title="Naik" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
-        <button data-move="down" data-id="${item.id}" type="button" title="Turun" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
-        <button data-dup="${item.id}" type="button" title="Duplikat" style="background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
-        <button class="person-remove" data-remove="${item.id}" type="button" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
+        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" aria-label="Nama pesanan" style="flex:1; color:#0F172A; font-weight:600;" />
+        <button data-move="up" data-id="${item.id}" type="button" title="Naik" aria-label="Pindah pesanan ke atas" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
+        <button data-move="down" data-id="${item.id}" type="button" title="Turun" aria-label="Pindah pesanan ke bawah" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
+        <button data-dup="${item.id}" type="button" title="Duplikat" aria-label="Duplikat pesanan" style="background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
+        <button class="person-remove" data-remove="${item.id}" type="button" aria-label="Hapus pesanan" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
       </div>
       <div style="display:flex; align-items:center; gap:6px; width: 100%;">
-        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:#0F172A; border:1px solid #CBD5E1;" />
+        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" aria-label="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:#0F172A; border:1px solid #CBD5E1;" />
         <span style="color:#64748B; font-size:14px; font-weight:bold;">×</span>
         <div style="position:relative; flex:1; max-width: 120px;">
           <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#64748B;">@</span>
-          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:#0F172A; border:1px solid #CBD5E1;" />
+          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" aria-label="Harga satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:#0F172A; border:1px solid #CBD5E1;" />
         </div>
         <span style="color:#64748B; font-size:14px; font-weight:bold;">=</span>
         <div style="position:relative; flex:1;">
           <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#10B981; font-weight:bold;">Rp</span>
-          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:#10B981; font-weight:bold; background:#F0FDF4; border:1px solid #A7F3D0;" />
+          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" aria-label="Harga total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:#10B981; font-weight:bold; background:#F0FDF4; border:1px solid #A7F3D0;" />
         </div>
       </div>
     `;
     list.appendChild(row);
   });
 
-  // Saat render, tampilkan nilai apa adanya dalam mode nominal (Rp).
+  // On render, show the raw values in nominal (Rp) mode.
   $<HTMLSelectElement>("t-tax-mode").value = "nominal";
   $<HTMLSelectElement>("t-service-mode").value = "nominal";
   $<HTMLSelectElement>("t-discount-mode").value = "nominal";
@@ -405,8 +444,8 @@ function renderBillStep() {
   updateBillTotals();
 }
 
-// Hitung nominal dari sebuah baris (pajak/service/diskon) yang punya mode Rp/%.
-// Kalau mode "%", nilainya dihitung dari subtotal dan nominalnya ditampilkan.
+// Compute the nominal value for a row (tax/service/discount) that has an Rp/% mode.
+// If mode is "%", the value is computed from the subtotal and the nominal is displayed.
 function resolveCharge(key: string, subtotal: number): number {
   const mode = $<HTMLSelectElement>(`t-${key}-mode`).value;
   const inputVal = Math.max(0, Number($<HTMLInputElement>(`t-${key}`).value) || 0);
@@ -486,7 +525,7 @@ $("items-list").addEventListener("click", (e) => {
     return;
   }
 
-  // Duplikat pesanan (disisipkan tepat di bawahnya).
+  // Duplicate order (inserted right below it).
   const dupBtn = t.closest("[data-dup]") as HTMLElement | null;
   if (dupBtn) {
     const id = Number(dupBtn.dataset.dup);
@@ -498,7 +537,7 @@ $("items-list").addEventListener("click", (e) => {
     return;
   }
 
-  // Urutkan naik/turun.
+  // Reorder up/down.
   const moveBtn = t.closest("[data-move]") as HTMLElement | null;
   if (moveBtn) {
     const id = Number(moveBtn.dataset.id);
@@ -526,7 +565,7 @@ $("btn-add-item").addEventListener("click", () => {
   last?.focus();
 });
 
-// Pajak / Service / Diskon — semua punya input nilai + selector mode (Rp/%).
+// Tax / Service / Discount — each has a value input + mode selector (Rp/%).
 ["t-tax", "t-service", "t-discount"].forEach((id) =>
   $(id).addEventListener("input", updateBillTotals),
 );
@@ -551,7 +590,7 @@ $("btn-to-people").addEventListener("click", () => {
 });
 
 // ============ STEP 3: PEOPLE ============
-// Wrapper tipis ke fungsi murni di ./calc (pakai state `people` saat ini).
+// Thin wrapper around the pure functions in ./calc (using the current `people` state).
 const getItemSharersCount = (itemId: number) => itemSharersCount(people, itemId);
 const getItemTotalShares = (itemId: number) => itemTotalShares(people, itemId);
 
@@ -566,8 +605,8 @@ function renderPeopleStep() {
 
   const tagsHtml = people.map(p => `
     <div style="display:inline-flex; align-items:center; background:#F1F5F9; border:1px solid #CBD5E1; color:#0F172A; padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
-      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" style="background:transparent; border:none; outline:none; color:#0F172A; font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
-      <button type="button" data-remove-person="${p.id}" style="margin-left:6px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
+      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" aria-label="Nama teman" style="background:transparent; border:none; outline:none; color:#0F172A; font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
+      <button type="button" data-remove-person="${p.id}" aria-label="Hapus teman ${escapeHtml(p.name)}" style="margin-left:6px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
     </div>
   `).join("");
 
@@ -581,7 +620,7 @@ function renderPeopleStep() {
 
   if (people.length === 0) return;
 
-  // Tombol "bagi rata semua" + peringatan pesanan yang belum dibagi ke siapa pun.
+  // "split everything evenly" button + warning for orders not yet assigned to anyone.
   const controls = document.createElement("div");
   controls.style.cssText = "margin-bottom:16px;";
   const unassigned = bill.items.filter(
@@ -622,9 +661,9 @@ function renderPeopleStep() {
               </div>
             </div>
             <div class="chip-actions" style="display:flex; align-items:center; gap:8px;">
-              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" style="padding:2px 8px; border-radius:4px; border:1px solid #0F172A; background:#FFFFFF; color:#0F172A; font-weight:bold; cursor:pointer;">-</button>
+              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" aria-label="Kurangi porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid #0F172A; background:#FFFFFF; color:#0F172A; font-weight:bold; cursor:pointer;">-</button>
               <span style="font-weight:bold; min-width:12px; text-align:center; color:#0F172A;">${qty}</span>
-              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" style="padding:2px 8px; border-radius:4px; border:1px solid #10B981; background:#10B981; color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
+              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" aria-label="Tambah porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid #10B981; background:#10B981; color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
             </div>
           </div>
         `;
@@ -667,7 +706,7 @@ $("people-list").addEventListener("click", (e) => {
     return;
   }
 
-  // Bagi rata SEMUA pesanan ke semua teman (qty 1 tiap orang tiap item).
+  // Split ALL orders evenly among all friends (qty 1 per person per item).
   if (t.closest("#btn-split-global")) {
     bill.items.forEach((it) =>
       people.forEach((p) => {
@@ -678,7 +717,7 @@ $("people-list").addEventListener("click", (e) => {
     return;
   }
 
-  // Bagi rata satu pesanan ke semua teman.
+  // Split one order evenly among all friends.
   const splitAll = t.closest(".btn-split-all") as HTMLElement | null;
   if (splitAll) {
     const iid = Number(splitAll.dataset.item);
@@ -689,7 +728,7 @@ $("people-list").addEventListener("click", (e) => {
     return;
   }
 
-  // Kosongkan satu pesanan dari semua teman.
+  // Clear one order from all friends.
   const clearItem = t.closest(".btn-clear-item") as HTMLElement | null;
   if (clearItem) {
     const iid = Number(clearItem.dataset.item);
@@ -737,7 +776,7 @@ $("people-list").addEventListener("click", (e) => {
   }
 });
 
-// Ganti nama teman langsung di tag (tanpa re-render supaya fokus tidak hilang).
+// Rename a friend directly in the tag (without re-rendering, so focus isn't lost).
 $("people-list").addEventListener("input", (e) => {
   const t = e.target as HTMLElement;
   const pid = t.dataset.editPerson;
@@ -766,7 +805,7 @@ $<HTMLInputElement>("new-person").addEventListener("keypress", (e) => {
 });
 
 // ============ STEP 4: CALCULATE ============
-// Logika hitung dipindah ke ./calc (calculateSplit). Di sini cuma simpan hasil.
+// Calculation logic moved to ./calc (calculateSplit). This just stores the result here.
 let lastResults: PersonResult[] = [];
 let lastGrandTotal = 0;
 
@@ -782,18 +821,18 @@ function setupBankInputs() {
     bankHtml.innerHTML = `
       <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:#0F172A; font-weight:600;">💳 Detail Pembayaran (Muncul Paling Atas PDF)</h4>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" style="flex:1; min-width:120px; color:#0F172A;" />
-        <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" style="flex:1; min-width:150px; color:#0F172A;" />
-        <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" style="flex:1; min-width:150px; color:#0F172A;" />
+        <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" aria-label="Nama bank" style="flex:1; min-width:120px; color:#0F172A;" />
+        <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" aria-label="Nomor rekening" style="flex:1; min-width:150px; color:#0F172A;" />
+        <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" aria-label="Nama pemilik rekening" style="flex:1; min-width:150px; color:#0F172A;" />
       </div>
-      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" style="width:100%; margin-top:10px; color:#0F172A;" />
+      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" aria-label="Link pembayaran" style="width:100%; margin-top:10px; color:#0F172A;" />
     `;
     $("step-result").insertBefore(bankHtml, $("summary-list"));
     ["bank-name-input", "bank-acc-input", "bank-holder-input", "bank-link-input"].forEach(
       (id) => $(id).addEventListener("input", scheduleSave),
     );
   }
-  // Pulihkan data rekening dari sesi tersimpan (kalau ada).
+  // Restore bank account data from the saved session (if any).
   if (savedBank) {
     $<HTMLInputElement>("bank-name-input").value = savedBank.name || "";
     $<HTMLInputElement>("bank-acc-input").value = savedBank.acc || "";
@@ -803,9 +842,18 @@ function setupBankInputs() {
   if (payLink) $<HTMLInputElement>("bank-link-input").value = payLink;
 }
 
-// ============ SETTLE-UP + SETTINGS + SHARE (disuntik ke #step-result sekali) ====
+// Insert an element into #step-result, above the action buttons (.btn-row)
+// if any already exist there, otherwise append it at the end.
+function insertIntoResultStep(el: HTMLElement) {
+  const step = $("step-result");
+  const firstRow = step.querySelector(".btn-row");
+  if (firstRow) step.insertBefore(el, firstRow);
+  else step.appendChild(el);
+}
+
+// ============ SETTLE-UP + SETTINGS + SHARE (injected into #step-result once) ====
 function setupResultExtras() {
-  // Pengaturan pembulatan + rekonsiliasi selisih.
+  // Rounding settings + difference reconciliation.
   if (!$("result-settings")) {
     const s = document.createElement("div");
     s.id = "result-settings";
@@ -814,12 +862,12 @@ function setupResultExtras() {
     s.innerHTML = `
       <div style="font-weight:600;margin-bottom:10px;">⚙️ Pengaturan pembulatan</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <select id="round-mode" class="input" style="flex:1;min-width:130px;color:#0F172A;cursor:pointer;">
+        <select id="round-mode" class="input" aria-label="Mode pembulatan" style="flex:1;min-width:130px;color:#0F172A;cursor:pointer;">
           <option value="nearest">Ke terdekat</option>
           <option value="up">Ke atas</option>
           <option value="down">Ke bawah</option>
         </select>
-        <select id="round-to" class="input" style="flex:1;min-width:110px;color:#0F172A;cursor:pointer;">
+        <select id="round-to" class="input" aria-label="Kelipatan pembulatan" style="flex:1;min-width:110px;color:#0F172A;cursor:pointer;">
           <option value="1000">per 1.000</option>
           <option value="500">per 500</option>
           <option value="100">per 100</option>
@@ -830,9 +878,7 @@ function setupResultExtras() {
         <input type="checkbox" id="round-reconcile" style="width:16px;height:16px;cursor:pointer;" />
         Samakan total terkumpul = bill (selisih dibebankan ke 1 orang)
       </label>`;
-    const firstRow = $("step-result").querySelector(".btn-row");
-    if (firstRow) $("step-result").insertBefore(s, firstRow);
-    else $("step-result").appendChild(s);
+    insertIntoResultStep(s);
     $("round-mode").addEventListener("change", () => {
       roundCfg.mode = $<HTMLSelectElement>("round-mode").value as RoundMode;
       renderResult();
@@ -854,11 +900,9 @@ function setupResultExtras() {
       "background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:16px;margin-top:16px;";
     wrap.innerHTML = `
       <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:8px;">🤝 Siapa yang nalangin / bayar duluan?</div>
-      <select id="settle-payer" class="input" style="color:#0F172A;cursor:pointer;"></select>
+      <select id="settle-payer" class="input" aria-label="Pilih yang menalangin" style="color:#0F172A;cursor:pointer;"></select>
       <div id="settle-list" style="margin-top:12px;"></div>`;
-    const firstRow = $("step-result").querySelector(".btn-row");
-    if (firstRow) $("step-result").insertBefore(wrap, firstRow);
-    else $("step-result").appendChild(wrap);
+    insertIntoResultStep(wrap);
     $("settle-payer").addEventListener("change", () => {
       payerName = $<HTMLSelectElement>("settle-payer").value;
       renderSettle();
@@ -879,25 +923,23 @@ function setupResultExtras() {
       btn("btn-png", "🖼️ PNG", "#0F172A", "#fff") +
       btn("btn-csv", "⬇️ CSV", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;") +
       btn("btn-link", "🔗 Salin link", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;");
-    const firstRow = $("step-result").querySelector(".btn-row");
-    if (firstRow) $("step-result").insertBefore(row, firstRow);
-    else $("step-result").appendChild(row);
+    insertIntoResultStep(row);
 
     $("btn-share-wa").addEventListener("click", () => {
       window.open(
-        "https://wa.me/?text=" + encodeURIComponent(buildShareText()),
+        "https://wa.me/?text=" + encodeURIComponent(currentShareText()),
         "_blank",
       );
     });
-    $("btn-copy").addEventListener("click", () => flashCopy("btn-copy", buildShareText()));
+    $("btn-copy").addEventListener("click", () => flashCopy("btn-copy", currentShareText()));
     $("btn-png").addEventListener("click", downloadPNG);
     $("btn-csv").addEventListener("click", downloadCSV);
     $("btn-link").addEventListener("click", () =>
-      flashCopy("btn-link", buildShareLink(), "🔗 Salin link", "✓ Link tersalin!"),
+      flashCopy("btn-link", encodeShareLink(buildState()), "🔗 Salin link", "✓ Link tersalin!"),
     );
   }
 
-  // Checklist "lunas" (delegasi, pasang sekali).
+  // "paid" checklist (delegated listener, attached once).
   if (!summaryPaidBound) {
     summaryPaidBound = true;
     $("summary-list").addEventListener("change", (e) => {
@@ -919,7 +961,7 @@ function syncRoundingControls() {
   if (rec) rec.checked = reconcile;
 }
 
-// Salin teks ke clipboard + animasi konfirmasi singkat pada tombol.
+// Copy text to the clipboard + a brief confirmation animation on the button.
 async function flashCopy(
   btnId: string,
   text: string,
@@ -939,7 +981,7 @@ async function flashCopy(
 }
 
 function renderSettle() {
-  // Kalau orang yang dipilih sudah dihapus, reset.
+  // If the selected person was removed, reset.
   if (payerName && !lastResults.some((r) => r.name === payerName)) payerName = "";
 
   const sel = $<HTMLSelectElement>("settle-payer");
@@ -982,44 +1024,19 @@ function capturePayLink(): string {
   return el ? el.value.trim() : payLink;
 }
 
-function buildShareText(): string {
-  const lines: string[] = ["*Patungan* 🧾"];
-  const bank = captureBank();
-  const link = capturePayLink();
-  if (bank && (bank.name || bank.acc || bank.holder)) {
-    lines.push("", "💳 Transfer ke:");
-    if (bank.name) lines.push("Bank " + bank.name);
-    if (bank.acc) lines.push(bank.acc);
-    if (bank.holder) lines.push("a.n. " + bank.holder);
-  }
-  if (link) lines.push("", "🔗 Bayar: " + link);
-  lines.push("");
-  lastResults.forEach((r) => {
-    lines.push(
-      `👤 *${r.name}* — ${fmtIDR(r.totalRounded)}${paid[r.name] ? " ✅ LUNAS" : ""}`,
-    );
-    r.items.forEach((i) =>
-      lines.push(
-        `   • ${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}: ${fmtIDR(i.share)}`,
-      ),
-    );
-  });
-  const grand = lastResults.reduce((s, r) => s + r.totalRounded, 0);
-  lines.push("", `💰 Total: ${fmtIDR(grand)}`);
-  if (payerName) {
-    const others = lastResults.filter(
-      (r) => r.name !== payerName && r.totalRounded > 0,
-    );
-    if (others.length) {
-      lines.push("", `🤝 Transfer ke *${payerName}* (yang nalangin):`);
-      others.forEach((r) => lines.push(`   ${r.name}: ${fmtIDR(r.totalRounded)}`));
-    }
-  }
-  lines.push("", "via patungan. — https://astro-patungan.vercel.app/");
-  return lines.join("\n");
+// Thin wrappers: gather the current DOM/app state and hand it to the pure
+// builders in ./receipt and ./share, which don't know about app.ts at all.
+function currentBank(): BankInfo | null {
+  return captureBank();
+}
+function currentShareText(): string {
+  return buildShareText(lastResults, paid, payerName, currentBank(), capturePayLink());
+}
+function currentReceiptNode(): HTMLElement {
+  return buildReceiptNode(lastResults, paid, currentBank(), capturePayLink());
 }
 
-// ============ AUTO-SAVE SESI (localStorage, tetap 100% offline) ============
+// ============ AUTO-SAVE SESSION (localStorage, still 100% offline) ============
 const SAVE_KEY = "patungan_session_v1";
 let saveTimer: number | undefined;
 
@@ -1033,8 +1050,8 @@ function captureBank(): { name: string; acc: string; holder: string } | null {
   };
 }
 
-// Tangkap mode (Rp/%) + nilai mentah pajak/service/diskon dari DOM, supaya
-// mode "%" tidak hilang saat sesi dipulihkan.
+// Capture mode (Rp/%) + raw tax/service/discount values from the DOM, so
+// "%" mode isn't lost when the session is restored.
 function captureCharges(): Record<string, { mode: string; val: number }> {
   const out: Record<string, { mode: string; val: number }> = {};
   ["tax", "service", "discount"].forEach((k) => {
@@ -1188,7 +1205,7 @@ function showRestoreBanner() {
   });
 }
 
-// Render seluruh langkah hasil. Aman dipanggil ulang (saat ganti pembulatan, dll).
+// Render the whole result step. Safe to call again (when rounding changes, etc).
 function renderResult() {
   const { results, grandTotal } = calculateSplit(bill, people);
   applyReconcileCalc(results, grandTotal, reconcile, payerName);
@@ -1283,122 +1300,9 @@ $("btn-calculate").addEventListener("click", () => {
   $("step-result").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
-// ============ STRUK DIGITAL: HTML dipakai bareng PDF (print) & PNG ============
-function buildReceiptHTML(): string {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("id-ID", {
-    day: "2-digit",
-    month: "long",
-    year: "numeric",
-  });
-
-  const bank = captureBank();
-  const link = capturePayLink();
-  const bName = bank?.name?.trim();
-  const bAcc = bank?.acc?.trim();
-  const bHolder = bank?.holder?.trim();
-
-  let bankHtml = "";
-  if (bName || bAcc || bHolder || link) {
-    bankHtml = `
-      <div style="background-color: #0F172A; color: #F8FAFC; border-radius: 12px; padding: 20px; margin-bottom: 24px; text-align: center; page-break-inside: avoid; box-shadow: 0 4px 6px rgba(15,23,42,0.1);">
-        <div style="font-size: 12px; color: #10B981; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">Transfer Pembayaran Ke</div>
-        ${bName ? `<div style="font-size: 16px; font-weight: 600; color: #F8FAFC;">Bank ${escapeHtml(bName)}</div>` : ""}
-        ${bAcc ? `<div style="font-size: 28px; font-family: monospace; font-weight: 900; margin: 4px 0; color: #10B981; letter-spacing: 2px; user-select: all;">${escapeHtml(bAcc)}</div>` : ""}
-        ${bHolder ? `<div style="font-size: 14px; color: #94A3B8; font-weight: 500;">a.n. ${escapeHtml(bHolder)}</div>` : ""}
-        ${link ? `<div style="font-size: 13px; color: #10B981; font-weight: 600; margin-top: 8px; word-break: break-all;">🔗 ${escapeHtml(link)}</div>` : ""}
-      </div>
-    `;
-  }
-
-  const personHtml = lastResults
-    .map(
-      (r) => `
-    <div style="background-color: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 16px; page-break-inside: avoid;">
-      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; border-bottom: 1px dashed #E2E8F0; padding-bottom: 12px;">
-        <div style="background-color: #F1F5F9; border-radius: 50%; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 16px;">👤</div>
-        <span style="font-weight: 800; font-size: 18px; color: #0F172A;">${escapeHtml(r.name)}</span>
-        ${paid[r.name] ? `<span style="margin-left:auto; font-size:11px; font-weight:700; background:#D1FAE5; color:#059669; padding:3px 10px; border-radius:6px;">LUNAS</span>` : ""}
-      </div>
-
-      <div style="font-size: 14px; color: #334155;">
-        ${r.items.map((i) => `
-          <div style="display:flex; justify-content:space-between; margin-bottom: 8px;">
-            <div style="flex:1; padding-right:12px; line-height: 1.4;">
-              <span style="font-weight: 600; color: #0F172A;">${escapeHtml(i.name)}</span>
-              ${i.qty < i.totalShares ? `<span style="color: #64748B; font-size: 12px; margin-left: 4px;">(${i.qty}/${i.totalShares})</span>` : ''}
-            </div>
-            <div style="font-family: monospace; font-weight: 500; color: #0F172A;">${fmtIDR(i.share)}</div>
-          </div>
-        `).join("")}
-
-        <div style="height: 1px; background-color: #E2E8F0; margin: 12px 0;"></div>
-
-        <div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569; font-weight:600;">
-          <div style="flex:1;">Subtotal</div>
-          <div style="font-family: monospace;">${fmtIDR(r.subtotal)}</div>
-        </div>
-
-        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569;"><div style="flex:1;">Pajak (Tax)</div><div style="font-family: monospace;">${fmtIDR(r.taxShare)}</div></div>` : ""}
-        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#475569;"><div style="flex:1;">Service Charge</div><div style="font-family: monospace;">${fmtIDR(r.serviceShare)}</div></div>` : ""}
-        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; margin-bottom:6px; color:#10B981; font-weight: 600;"><div style="flex:1;">Diskon</div><div style="font-family: monospace;">−${fmtIDR(r.discountShare)}</div></div>` : ""}
-      </div>
-
-      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed #E2E8F0; display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-weight: 700; font-size: 14px; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px;">Total Bayar</span>
-        <span style="color: #FFFFFF; background-color: #10B981; padding: 6px 12px; border-radius: 8px; font-size: 18px; font-weight: 900; font-family: monospace; box-shadow: 0 2px 4px rgba(16,185,129,0.2);">${fmtIDR(r.totalRounded)}</span>
-      </div>
-    </div>
-  `,
-    )
-    .join("");
-
-  const grandRounded = lastResults.reduce((s, r) => s + r.totalRounded, 0);
-
-  return `
-    <div style="border-bottom: 2px solid #10B981; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center;">
-      <div>
-        <div style="font-size: 32px; font-weight: 900; color: #0F172A; letter-spacing: -1px; line-height: 1;">patungan.</div>
-        <span style="color: #10B981; font-size: 13px; font-weight: bold; margin-top: 6px; display: inline-block;">🔗 astro-patungan.vercel.app</span>
-      </div>
-      <div style="text-align: right;">
-        <div style="font-size: 12px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 1px;">Struk Digital</div>
-        <div style="font-size: 14px; color: #0F172A; font-weight: 600; margin-top: 2px;">${dateStr}</div>
-      </div>
-    </div>
-
-    ${bankHtml}
-
-    <div style="margin-bottom: 8px; font-weight: bold; font-size: 16px; color: #0F172A;">Rincian Patungan:</div>
-    ${personHtml}
-
-    <div style="margin-top: 24px; padding: 20px; background-color: #F8FAFC; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; border: 2px solid #10B981; page-break-inside: avoid;">
-      <div>
-        <div style="font-weight: 800; font-size: 18px; color: #0F172A;">Total Terkumpul</div>
-        <div style="font-size: 13px; color: #64748B; margin-top: 4px;">Sesuai struk + pembulatan</div>
-      </div>
-      <span style="font-weight: 900; font-size: 24px; color: #10B981; font-family: monospace;">${fmtIDR(grandRounded)}</span>
-    </div>
-
-    <div style="margin-top: 32px; text-align: center; color: #94A3B8; font-size: 12px;">
-      <div style="font-weight: 600;">Dihitung secara adil & transparan.</div>
-      <div style="margin-top: 4px;">&copy; dyudhani 2026 | No server, 100% aman.</div>
-    </div>
-  `;
-}
-
-function buildReceiptNode(): HTMLElement {
-  const c = document.createElement("div");
-  c.id = "print-container";
-  c.style.cssText =
-    "max-width:600px;margin:0 auto;padding:24px 20px;background-color:#F8FAFC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#0F172A;";
-  c.innerHTML = buildReceiptHTML();
-  return c;
-}
-
 // ===== PDF via print =====
 $("btn-download").addEventListener("click", () => {
-  const printContainer = buildReceiptNode();
+  const printContainer = currentReceiptNode();
   const printStyle = document.createElement("style");
   printStyle.id = "print-style";
   printStyle.innerHTML = `
@@ -1418,10 +1322,22 @@ $("btn-download").addEventListener("click", () => {
 // ===== PNG (html-to-image) =====
 async function downloadPNG() {
   if (typeof htmlToImage === "undefined") {
-    alert("Modul gambar belum termuat. Cek koneksi lalu coba lagi.");
-    return;
+    const btn = $<HTMLButtonElement>("btn-png");
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "⏳ Memuat...";
+    try {
+      await loadHtmlToImage();
+    } catch (e) {
+      console.error(e);
+      alert("Gagal memuat modul gambar. Cek koneksi lalu coba lagi.");
+      return;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
   }
-  const node = buildReceiptNode();
+  const node = currentReceiptNode();
   node.style.position = "fixed";
   node.style.left = "-99999px";
   node.style.top = "0";
@@ -1434,10 +1350,7 @@ async function downloadPNG() {
       backgroundColor: "#F8FAFC",
       cacheBust: true,
     });
-    const a = document.createElement("a");
-    a.download = `patungan-${new Date().toISOString().slice(0, 10)}.png`;
-    a.href = dataUrl;
-    a.click();
+    triggerDownload(dataUrl, `patungan-${new Date().toISOString().slice(0, 10)}.png`);
   } catch (e) {
     console.error(e);
     alert("Gagal membuat PNG. Coba lagi.");
@@ -1448,56 +1361,17 @@ async function downloadPNG() {
 
 // ===== CSV =====
 function downloadCSV() {
-  const rows: (string | number)[][] = [
-    ["Nama", "Pesanan", "Subtotal", "Pajak", "Service", "Diskon", "Total", "Status"],
-  ];
-  lastResults.forEach((r) => {
-    const items = r.items
-      .map(
-        (i) =>
-          `${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}=${Math.round(i.share)}`,
-      )
-      .join("; ");
-    rows.push([
-      r.name,
-      items,
-      Math.round(r.subtotal),
-      Math.round(r.taxShare),
-      Math.round(r.serviceShare),
-      Math.round(r.discountShare),
-      r.totalRounded,
-      paid[r.name] ? "LUNAS" : "Belum",
-    ]);
-  });
-  const grand = lastResults.reduce((s, r) => s + r.totalRounded, 0);
-  rows.push([]);
-  rows.push(["Total Terkumpul", "", "", "", "", "", grand, ""]);
-
-  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  const blob = new Blob(["﻿" + csv], {
-    type: "text/csv;charset=utf-8;",
-  });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `patungan-${new Date().toISOString().slice(0, 10)}.csv`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
-
-// ===== SHARE VIA LINK (encode state ke URL hash, tetap offline) =====
-function buildShareLink(): string {
-  const json = JSON.stringify(buildState());
-  const b64 = btoa(unescape(encodeURIComponent(json)));
-  return location.origin + location.pathname + "#s=" + b64;
+  const csv = buildCsv(lastResults, paid);
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  downloadBlob(blob, `patungan-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
 function tryLoadFromHash(): boolean {
-  const m = location.hash.match(/[#&]s=([^&]+)/);
-  if (!m) return false;
+  const encoded = extractShareHash(location.hash);
+  if (!encoded) return false;
   try {
-    const json = decodeURIComponent(escape(atob(m[1])));
-    const s = JSON.parse(json);
-    history.replaceState(null, "", location.pathname); // bersihkan hash
+    const s: any = decodeShareState(encoded);
+    history.replaceState(null, "", location.pathname); // clean up the hash
     if (!s || !s.bill) return false;
     if (confirm("Buka patungan dari link yang dibagikan?")) {
       restoreSession(s);
@@ -1509,7 +1383,7 @@ function tryLoadFromHash(): boolean {
   }
 }
 
-// ===== RIWAYAT PATUNGAN (beberapa sesi lama) =====
+// ===== BILL-SPLIT HISTORY (past sessions) =====
 const HIST_KEY = "patungan_history_v1";
 function loadHistory(): any[] {
   try {
@@ -1548,43 +1422,13 @@ $("btn-reset").addEventListener("click", () => {
 });
 
 // ============ DARK MODE TOGGLE (#12) ============
-const themeBtn = document.createElement("button");
-themeBtn.type = "button";
-themeBtn.id = "theme-toggle";
-themeBtn.style.cssText =
-  "margin-left:auto;background:transparent;border:1px solid var(--line);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:16px;color:var(--ink);line-height:1;";
-function syncThemeBtn() {
-  const dark = document.documentElement.getAttribute("data-theme") === "dark";
-  themeBtn.textContent = dark ? "☀️" : "🌙";
-  themeBtn.title = dark ? "Mode terang" : "Mode gelap";
-}
-themeBtn.addEventListener("click", () => {
-  const dark = document.documentElement.getAttribute("data-theme") === "dark";
-  try {
-    if (dark) {
-      document.documentElement.removeAttribute("data-theme");
-      localStorage.setItem("patungan_theme", "light");
-    } else {
-      document.documentElement.setAttribute("data-theme", "dark");
-      localStorage.setItem("patungan_theme", "dark");
-    }
-  } catch {
-    /* noop */
-  }
-  syncThemeBtn();
-});
-document.querySelector(".brand")?.appendChild(themeBtn);
-syncThemeBtn();
+setupThemeToggle();
 
-// ============ PWA: daftarkan service worker (#11) ============
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
-  });
-}
+// ============ PWA: register service worker (#11) ============
+registerServiceWorker();
 
 // ============ INIT ============
-// Prioritas: link share → kalau tidak ada, tawarkan pulihkan sesi tersimpan.
+// Priority: share link → if none, offer to restore the saved session.
 if (!tryLoadFromHash()) showRestoreBanner();
 
 void lastGrandTotal;
