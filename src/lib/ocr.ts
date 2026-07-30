@@ -1,7 +1,9 @@
-// OCR struk — preprocessing gambar + Tesseract dual-pass. Semua jalan di browser
-// (tanpa kirim data). Dipisah dari UI supaya gampang dirawat & dipakai ulang.
+// Receipt OCR — image preprocessing + Tesseract dual-pass. Everything runs
+// in the browser (no data sent anywhere). Split out from the UI so it's easy
+// to maintain and reuse.
 
 import { parseReceipt, type ParsedReceipt } from "./parseReceipt";
+import { loadTesseract } from "./cdn";
 
 declare const Tesseract: any;
 
@@ -23,10 +25,223 @@ export function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
+// ============ IMAGE PROCESSING PRIMITIVES (integral image based) ============
+// Summed-area table: mean/std over any window computed O(1) without nested
+// loops, so local contrast normalization & skew detection stay fast even
+// after the image has been upscaled to ~2600px.
+
+interface IntegralImages {
+  sum: Float64Array;
+  sumSq: Float64Array;
+}
+
+function buildIntegral(gray: Float32Array, w: number, h: number): IntegralImages {
+  const stride = w + 1;
+  const sum = new Float64Array(stride * (h + 1));
+  const sumSq = new Float64Array(stride * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let rowSum = 0;
+    let rowSumSq = 0;
+    const rowOff = y * w;
+    const outRow = (y + 1) * stride;
+    const prevRow = y * stride;
+    for (let x = 0; x < w; x++) {
+      const v = gray[rowOff + x];
+      rowSum += v;
+      rowSumSq += v * v;
+      sum[outRow + x + 1] = sum[prevRow + x + 1] + rowSum;
+      sumSq[outRow + x + 1] = sumSq[prevRow + x + 1] + rowSumSq;
+    }
+  }
+  return { sum, sumSq };
+}
+
+function localMeanStd(
+  ii: IntegralImages,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  r: number,
+): { mean: number; std: number } {
+  const stride = w + 1;
+  const x0 = Math.max(0, x - r);
+  const y0 = Math.max(0, y - r);
+  const x1 = Math.min(w - 1, x + r);
+  const y1 = Math.min(h - 1, y + r);
+  const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+  const A = y0 * stride + x0;
+  const B = y0 * stride + x1 + 1;
+  const C = (y1 + 1) * stride + x0;
+  const D = (y1 + 1) * stride + x1 + 1;
+  const s = ii.sum[D] - ii.sum[B] - ii.sum[C] + ii.sum[A];
+  const sq = ii.sumSq[D] - ii.sumSq[B] - ii.sumSq[C] + ii.sumSq[A];
+  const mean = s / area;
+  const variance = Math.max(0, sq / area - mean * mean);
+  return { mean, std: Math.sqrt(variance) };
+}
+
 /**
- * Bersihkan gambar struk: upscale yang kekecilan, rotasi (foto miring),
- * grayscale, lalu auto-contrast. Mengembalikan canvas siap-OCR; kalau gagal
- * kembalikan file asli supaya Tesseract tetap bisa coba.
+ * LOCAL contrast normalization (CLAHE-like) using a per-window z-score.
+ * Far more robust to uneven lighting / glare on a receipt photo than a
+ * global contrast stretch — every region of the image gets normalized to
+ * the same contrast scale, so text that's faint on one side stays legible.
+ */
+function adaptiveLocalContrast(
+  gray: Float32Array,
+  w: number,
+  h: number,
+  radius = 20,
+  targetStd = 55,
+  stdFloor = 12,
+): Float32Array {
+  const ii = buildIntegral(gray, w, h);
+  const out = new Float32Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const { mean, std } = localMeanStd(ii, w, h, x, y, radius);
+      const z = (gray[y * w + x] - mean) / Math.max(std, stdFloor);
+      const v = 128 + z * targetStd;
+      out[y * w + x] = v < 0 ? 0 : v > 255 ? 255 : v;
+    }
+  }
+  return out;
+}
+
+/** Grayscale image (Float32) → RGB canvas (so it can go through canvas rotate). */
+function grayToCanvas(gray: Float32Array, w: number, h: number): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const cx = c.getContext("2d")!;
+  const id = cx.createImageData(w, h);
+  for (let j = 0, i = 0; j < w * h; j++, i += 4) {
+    const v = gray[j];
+    id.data[i] = id.data[i + 1] = id.data[i + 2] = v;
+    id.data[i + 3] = 255;
+  }
+  cx.putImageData(id, 0, 0);
+  return c;
+}
+
+function canvasToGray(c: HTMLCanvasElement): { gray: Float32Array; w: number; h: number } {
+  const cx = c.getContext("2d", { willReadFrequently: true })!;
+  const id = cx.getImageData(0, 0, c.width, c.height);
+  const d = id.data;
+  const gray = new Float32Array(c.width * c.height);
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) {
+    gray[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  return { gray, w: c.width, h: c.height };
+}
+
+/** Rotate a canvas by a small angle, growing the canvas a bit so corners don't get clipped. */
+function rotateCanvasByAngle(src: HTMLCanvasElement, angleDeg: number): HTMLCanvasElement {
+  const rad = (angleDeg * Math.PI) / 180;
+  const w = src.width;
+  const h = src.height;
+  const absCos = Math.abs(Math.cos(rad));
+  const absSin = Math.abs(Math.sin(rad));
+  const nw = Math.round(w * absCos + h * absSin);
+  const nh = Math.round(w * absSin + h * absCos);
+  const c = document.createElement("canvas");
+  c.width = nw;
+  c.height = nh;
+  const cx = c.getContext("2d")!;
+  cx.fillStyle = "#fff";
+  cx.fillRect(0, 0, nw, nh);
+  cx.imageSmoothingEnabled = true;
+  cx.imageSmoothingQuality = "high";
+  cx.translate(nw / 2, nh / 2);
+  cx.rotate(rad);
+  cx.drawImage(src, -w / 2, -h / 2);
+  return c;
+}
+
+/**
+ * Detect the small residual skew (±10°) left after the user's manual coarse
+ * 90° rotation — a hand-held receipt photo is almost always off by a few
+ * degrees, and that's enough to make Tesseract misread everything (letters
+ * turn to noise). Found via row projection: the correct angle lines text
+ * rows up horizontally, so the variance of dark-pixel count per row is
+ * highest (text rows vs. blank rows become sharply contrasted).
+ */
+function detectSkewAngle(gray: Float32Array, w: number, h: number): number {
+  const maxW = 500;
+  const scale = Math.min(1, maxW / w);
+  const sw = Math.max(1, Math.round(w * scale));
+  const sh = Math.max(1, Math.round(h * scale));
+
+  const small = new Float32Array(sw * sh);
+  let sum = 0;
+  for (let y = 0; y < sh; y++) {
+    const sy = Math.min(h - 1, Math.round(y / scale));
+    for (let x = 0; x < sw; x++) {
+      const sx = Math.min(w - 1, Math.round(x / scale));
+      const v = gray[sy * w + sx];
+      small[y * sw + x] = v;
+      sum += v;
+    }
+  }
+  const mean = sum / (sw * sh);
+
+  const darkX: number[] = [];
+  const darkY: number[] = [];
+  for (let y = 0; y < sh; y++) {
+    for (let x = 0; x < sw; x++) {
+      if (small[y * sw + x] < mean * 0.85) {
+        darkX.push(x - sw / 2);
+        darkY.push(y - sh / 2);
+      }
+    }
+  }
+  if (darkX.length < 20) return 0; // too little text detected, don't guess
+
+  function varianceAtAngle(deg: number): number {
+    const rad = (deg * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const rowSums = new Float64Array(sh);
+    for (let i = 0; i < darkX.length; i++) {
+      const ry = -darkX[i] * sin + darkY[i] * cos;
+      const bucket = Math.round(ry + sh / 2);
+      if (bucket >= 0 && bucket < sh) rowSums[bucket]++;
+    }
+    let m = 0;
+    for (let i = 0; i < sh; i++) m += rowSums[i];
+    m /= sh;
+    let variance = 0;
+    for (let i = 0; i < sh; i++) {
+      const diff = rowSums[i] - m;
+      variance += diff * diff;
+    }
+    return variance / sh;
+  }
+
+  let best = 0;
+  let bestScore = -1;
+  for (let deg = -10; deg <= 10; deg += 1) {
+    const s = varianceAtAngle(deg);
+    if (s > bestScore) {
+      bestScore = s;
+      best = deg;
+    }
+  }
+  for (let deg = best - 1; deg <= best + 1; deg += 0.2) {
+    const s = varianceAtAngle(deg);
+    if (s > bestScore) {
+      bestScore = s;
+      best = deg;
+    }
+  }
+  return best;
+}
+
+/**
+ * Clean up a receipt photo: upscale if too small, rotate (tilted photo),
+ * fine-angle auto-deskew, then local contrast normalization (robust to
+ * glare / uneven lighting). Returns an OCR-ready canvas; on failure returns
+ * the original file so Tesseract can still try.
  */
 export async function preprocessImage(
   file: File,
@@ -38,7 +253,7 @@ export async function preprocessImage(
     let h = img.naturalHeight || img.height;
     if (!w || !h) return file;
 
-    const TARGET_MIN = 1600;
+    const TARGET_MIN = 1800;
     const MAX_DIM = 2600;
     let scale = 1;
     if (Math.min(w, h) < TARGET_MIN) scale = TARGET_MIN / Math.min(w, h);
@@ -61,34 +276,43 @@ export async function preprocessImage(
     ctx.drawImage(img, -w / 2, -h / 2, w, h);
     ctx.restore();
 
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = imageData.data;
+    let { gray, w: gw, h: gh } = canvasToGray(canvas);
 
-    // Grayscale (luminance) + rata-rata untuk auto-contrast.
-    let sum = 0;
-    const gray = new Float32Array(d.length / 4);
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-      gray[j] = g;
-      sum += g;
+    // Fine deskew: a hand-held photo is rarely exactly 0/90/180/270.
+    const skew = detectSkewAngle(gray, gw, gh);
+    if (Math.abs(skew) > 0.15) {
+      const rotated = rotateCanvasByAngle(grayToCanvas(gray, gw, gh), skew);
+      const re = canvasToGray(rotated);
+      gray = re.gray;
+      gw = re.w;
+      gh = re.h;
     }
-    const mean = sum / gray.length;
 
-    // Contrast stretch sedang (1.35) — teks pudar tetap kebaca.
-    const contrast = 1.35;
-    for (let i = 0, j = 0; i < d.length; i += 4, j++) {
-      let v = (gray[j] - mean) * contrast + mean;
-      v = v < 0 ? 0 : v > 255 ? 255 : v;
-      d[i] = d[i + 1] = d[i + 2] = v;
+    const normalized = adaptiveLocalContrast(gray, gw, gh);
+
+    const outCanvas = document.createElement("canvas");
+    outCanvas.width = gw;
+    outCanvas.height = gh;
+    const outCtx = outCanvas.getContext("2d")!;
+    const outData = outCtx.createImageData(gw, gh);
+    for (let j = 0, i = 0; j < gw * gh; j++, i += 4) {
+      const v = normalized[j];
+      outData.data[i] = outData.data[i + 1] = outData.data[i + 2] = v;
+      outData.data[i + 3] = 255;
     }
-    ctx.putImageData(imageData, 0, 0);
-    return canvas;
+    outCtx.putImageData(outData, 0, 0);
+    return outCanvas;
   } catch {
     return file;
   }
 }
 
-/** Skor hasil parse: makin banyak item bernama+berharga makin bagus. */
+/**
+ * Score a parse result: more named+priced items is better.
+ * Consistency warnings (item total vs. receipt total far apart, etc.) from
+ * ./parseReceipt act as a tie-breaker — between 2 Tesseract passes, prefer
+ * the one whose numbers add up, not just the one with the most items.
+ */
 export function scoreParse(p: ParsedReceipt): number {
   const goodItems = p.items.filter(
     (i) => i.name && i.name !== "ORPHAN_PRICE" && i.total > 0,
@@ -97,7 +321,8 @@ export function scoreParse(p: ParsedReceipt): number {
     goodItems * 100 +
     (p.subtotal > 0 ? 15 : 0) +
     (p.tax > 0 ? 5 : 0) +
-    (p.total > 0 ? 5 : 0)
+    (p.total > 0 ? 5 : 0) -
+    p.warnings.length * 20
   );
 }
 
@@ -107,8 +332,9 @@ export interface RecognizeOpts {
 }
 
 /**
- * Baca struk: preprocessing → Tesseract DUAL-PASS (PSM 6 blok & PSM 4 kolom),
- * lalu pilih hasil parse terbaik. Mengembalikan ParsedReceipt.
+ * Read a receipt: preprocessing (deskew + adaptive local contrast) →
+ * Tesseract DUAL-PASS (PSM 6 block & PSM 4 column), then pick the best
+ * parse result. Returns a ParsedReceipt.
  */
 export async function recognizeReceipt(
   file: File,
@@ -117,10 +343,13 @@ export async function recognizeReceipt(
   const { rotation = 0, onProgress } = opts;
   const report: ProgressFn = onProgress || (() => {});
 
-  // Progress tahap "recognizing text" di-scale per pass.
+  // "recognizing text" progress is scaled per pass.
   let ocrBase = 60;
   let ocrSpan = 40;
   let ocrPassText = "Membaca struk...";
+
+  report(2, "Mengunduh OCR engine...");
+  await loadTesseract();
 
   report(5, "Memuat Tesseract OCR...");
   const worker = await Tesseract.createWorker("ind+eng", 1, {
@@ -141,11 +370,16 @@ export async function recognizeReceipt(
   });
 
   try {
-    await worker.setParameters({ preserve_interword_spaces: "1" });
-    report(48, "Membersihkan gambar struk...");
+    await worker.setParameters({
+      preserve_interword_spaces: "1",
+      // Our upscale is already high (~1800-2600px) — tell Tesseract so its
+      // LSTM font-size heuristics don't wrongly assume this is a real 300dpi scan.
+      user_defined_dpi: "300",
+    });
+    report(48, "Meluruskan & menajamkan kontras struk...");
     const processed = await preprocessImage(file, rotation);
 
-    // Pass 1 — PSM 6: satu blok teks seragam.
+    // Pass 1 — PSM 6: a single uniform text block.
     await worker.setParameters({ tessedit_pageseg_mode: "6" });
     ocrBase = 60;
     ocrSpan = 20;
@@ -153,7 +387,7 @@ export async function recognizeReceipt(
     report(60, ocrPassText);
     const p1 = parseReceipt((await worker.recognize(processed)).data.text);
 
-    // Pass 2 — PSM 4: satu kolom teks (ukuran bervariasi).
+    // Pass 2 — PSM 4: a single column of text (variable-size).
     await worker.setParameters({ tessedit_pageseg_mode: "4" });
     ocrBase = 80;
     ocrSpan = 20;
