@@ -1,10 +1,10 @@
-// Format angka & pembulatan.
+// Number formatting & rounding.
 
 export type RoundMode = "up" | "nearest" | "down";
 
-// Konfigurasi pembulatan (objek mutable — diubah dari UI langkah hasil).
-//   to: kelipatan (1000/500/100, atau 1 = tanpa pembulatan).
-//   mode: "up" ke atas, "nearest" ke terdekat (paling adil), "down" ke bawah.
+// Rounding config (mutable object — changed from the result-step UI).
+//   to: rounding step (1000/500/100, or 1 = no rounding).
+//   mode: "up" round up, "nearest" round to nearest (fairest), "down" round down.
 export const roundCfg: { to: number; mode: RoundMode } = {
   to: 1000,
   mode: "nearest",
@@ -21,7 +21,7 @@ export const roundTotal = (n: number) => {
   return Math.ceil(n / to) * to;
 };
 
-/** Bungkus sel CSV kalau mengandung koma/kutip/baris baru. */
+/** Wrap a CSV cell in quotes if it contains a comma/quote/newline. */
 export const csvCell = (v: string | number): string => {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
