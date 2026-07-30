@@ -47,6 +47,13 @@ npm run build
 4. Gambar diproses **di browser kamu** — tidak dikirim ke mana-mana
 5. Hasil teks di-parse oleh `parseReceipt.ts` untuk extract item & total
 
+Batasan, arsitektur, dan cara nambah contoh struk baru buat regression test:
+lihat [`OCR_ENGINEERING.md`](./OCR_ENGINEERING.md).
+
+```bash
+npm test   # regression test parser (src/lib/parseReceipt.test.ts)
+```
+
 ## Customisasi
 
 ### Ubah pembulatan
