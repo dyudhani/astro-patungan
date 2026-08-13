@@ -8,9 +8,8 @@ import {
 } from "./share";
 import type { PersonResult } from "./types";
 
-// These were previously impossible to unit-test — the logic lived inline
-// inside app.ts, closing over its module-level state. Now they're plain
-// functions: data in, string out.
+// Previously untestable — this logic lived inline in app.ts, closing over
+// its module state. Now plain functions: data in, string out.
 
 const results: PersonResult[] = [
   {

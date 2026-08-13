@@ -34,13 +34,11 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       rel="stylesheet"
     />
     <!--
-      Tesseract.js & html-to-image used to be loaded here eagerly on every
-      page load. They're now lazy-loaded on demand from ./src/lib/cdn.ts,
-      right before OCR scanning / PNG export actually run — most visitors
-      never trigger either, so this saves a multi-MB download for them.
+      Tesseract.js & html-to-image are lazy-loaded on demand from
+      ./src/lib/cdn.ts instead of blocking every page load here.
     -->
     <script is:inline>
-      // Pakai tema gelap secepatnya supaya tidak ada kedipan (flash) saat load.
+      // Apply dark theme immediately to avoid a flash of light mode on load.
       try {
         if (localStorage.getItem("patungan_theme") === "dark")
           document.documentElement.setAttribute("data-theme", "dark");
@@ -51,26 +49,26 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
     <slot />
     <style is:global>
       :root {
-        /* Warna Dominan (60%) */
+        /* Dominant color (60%) */
         --bg: #f8fafc;
         --bg-card: #ffffff;
 
-        /* Warna Sekunder (30%) */
+        /* Secondary color (30%) */
         --ink: #0f172a;
         --ink-soft: #334155;
         --ink-muted: #64748b;
 
-        /* Warna Aksen (10%) */
+        /* Accent color (10%) */
         --accent: #10b981;
         --accent-soft: #d1fae5;
 
-        /* Status: bahaya (hapus, error) & peringatan */
+        /* Status: danger (delete, error) & warning */
         --danger: #dc2626;
         --danger-soft: #fee2e2;
         --warning: #d97706;
         --warning-soft: #fef3c7;
 
-        /* Garis dan batas */
+        /* Lines and borders */
         --line: #e2e8f0;
         --line-soft: #f1f5f9;
 
@@ -113,7 +111,7 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
             transparent 45%
           );
       }
-      /* Paksa input tetap terbaca di dark mode (banyak inline color di JS). */
+      /* Force inputs to stay readable in dark mode (many inline JS colors). */
       html[data-theme="dark"] .input {
         color: var(--ink) !important;
         background: var(--bg-card) !important;
@@ -335,7 +333,7 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         transition: all 0.15s ease;
         border: 1px solid transparent;
       }
-      /* Tombol Primary menggunakan warna sekunder UI */
+      /* Primary button uses the UI's secondary color */
       .btn-primary {
         background: var(--ink);
         color: var(--bg);

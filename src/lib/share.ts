@@ -1,6 +1,5 @@
-// Turning a calculated split into shareable text/CSV/link. Pure functions —
-// no DOM, no app.ts state — so sharing logic has one job and is testable
-// on its own, separate from how the result gets copied/downloaded/opened.
+// Turns a calculated split into shareable text/CSV/link. Pure functions —
+// no DOM, no app.ts state — testable on their own.
 
 import type { PersonResult } from "./types";
 import { fmtIDR, csvCell } from "./format";

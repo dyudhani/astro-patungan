@@ -1,8 +1,5 @@
-// Custom alert/confirm dialog — replaces native browser alert()/confirm(),
-// which can't be styled and look jarring next to this app's own design
-// system (fonts, colors, rounded cards, dark mode). Reuses the existing
-// .card/.btn classes from Layout.astro so it stays visually consistent and
-// themes correctly for free.
+// Custom alert/confirm dialog replacing native browser ones (unstyled, jarring).
+// Reuses the .card/.btn classes from Layout.astro so it themes for free.
 
 function buildOverlay(): HTMLDivElement {
   const overlay = document.createElement("div");
@@ -65,10 +62,8 @@ export function showAlert(message: string, okLabel = "OK"): Promise<void> {
   });
 }
 
-/**
- * Show a message with Cancel/Confirm buttons. Resolves true if confirmed,
- * false if cancelled (button, backdrop click, or Escape).
- */
+// Show a message with Cancel/Confirm buttons. Resolves true if confirmed,
+// false if cancelled (button, backdrop click, or Escape).
 export function showConfirm(
   message: string,
   opts: { confirmLabel?: string; cancelLabel?: string } = {},

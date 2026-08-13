@@ -1,6 +1,4 @@
-// Receipt OCR — image preprocessing + Tesseract dual-pass. Everything runs
-// in the browser (no data sent anywhere). Split out from the UI so it's easy
-// to maintain and reuse.
+// Receipt OCR — image preprocessing + Tesseract dual-pass, all in-browser.
 
 import { parseReceipt, type ParsedReceipt } from "./parseReceipt";
 import { loadTesseract } from "./cdn";
@@ -26,9 +24,8 @@ export function loadImage(file: File): Promise<HTMLImageElement> {
 }
 
 // ============ IMAGE PROCESSING PRIMITIVES (integral image based) ============
-// Summed-area table: mean/std over any window computed O(1) without nested
-// loops, so local contrast normalization & skew detection stay fast even
-// after the image has been upscaled to ~2600px.
+// Summed-area table: mean/std over any window in O(1), so contrast/skew
+// detection stay fast even on a ~2600px upscaled image.
 
 interface IntegralImages {
   sum: Float64Array;
@@ -81,12 +78,8 @@ function localMeanStd(
   return { mean, std: Math.sqrt(variance) };
 }
 
-/**
- * LOCAL contrast normalization (CLAHE-like) using a per-window z-score.
- * Far more robust to uneven lighting / glare on a receipt photo than a
- * global contrast stretch — every region of the image gets normalized to
- * the same contrast scale, so text that's faint on one side stays legible.
- */
+// LOCAL contrast normalization (CLAHE-like) via per-window z-score.
+// More robust to uneven lighting/glare than a single global contrast stretch.
 function adaptiveLocalContrast(
   gray: Float32Array,
   w: number,
@@ -158,14 +151,8 @@ function rotateCanvasByAngle(src: HTMLCanvasElement, angleDeg: number): HTMLCanv
   return c;
 }
 
-/**
- * Detect the small residual skew (±10°) left after the user's manual coarse
- * 90° rotation — a hand-held receipt photo is almost always off by a few
- * degrees, and that's enough to make Tesseract misread everything (letters
- * turn to noise). Found via row projection: the correct angle lines text
- * rows up horizontally, so the variance of dark-pixel count per row is
- * highest (text rows vs. blank rows become sharply contrasted).
- */
+// Detects residual skew (±10°) left after the user's manual 90° rotation.
+// Uses row projection: the correct angle maximizes dark-pixel variance per row.
 function detectSkewAngle(gray: Float32Array, w: number, h: number): number {
   const maxW = 500;
   const scale = Math.min(1, maxW / w);
@@ -237,12 +224,8 @@ function detectSkewAngle(gray: Float32Array, w: number, h: number): number {
   return best;
 }
 
-/**
- * Clean up a receipt photo: upscale if too small, rotate (tilted photo),
- * fine-angle auto-deskew, then local contrast normalization (robust to
- * glare / uneven lighting). Returns an OCR-ready canvas; on failure returns
- * the original file so Tesseract can still try.
- */
+// Upscales, rotates, auto-deskews, and contrast-normalizes a receipt photo.
+// Returns the original file on failure so Tesseract can still try.
 export async function preprocessImage(
   file: File,
   rotation = 0,
@@ -307,12 +290,8 @@ export async function preprocessImage(
   }
 }
 
-/**
- * Score a parse result: more named+priced items is better.
- * Consistency warnings (item total vs. receipt total far apart, etc.) from
- * ./parseReceipt act as a tie-breaker — between 2 Tesseract passes, prefer
- * the one whose numbers add up, not just the one with the most items.
- */
+// Scores a parse: more named+priced items is better, minus a penalty per
+// ./parseReceipt consistency warning — picks the pass whose numbers add up.
 export function scoreParse(p: ParsedReceipt): number {
   const goodItems = p.items.filter(
     (i) => i.name && i.name !== "ORPHAN_PRICE" && i.total > 0,
@@ -331,11 +310,8 @@ export interface RecognizeOpts {
   onProgress?: ProgressFn;
 }
 
-/**
- * Read a receipt: preprocessing (deskew + adaptive local contrast) →
- * Tesseract DUAL-PASS (PSM 6 block & PSM 4 column), then pick the best
- * parse result. Returns a ParsedReceipt.
- */
+// Reads a receipt: preprocess → Tesseract dual-pass (PSM 6 block, PSM 4
+// column) → keep whichever parse scores best. Returns a ParsedReceipt.
 export async function recognizeReceipt(
   file: File,
   opts: RecognizeOpts = {},

@@ -83,10 +83,8 @@ const SKIP_KEYWORDS = [
   'dine in', 'dine-in', 'take away', 'takeaway', 'pesanan diterima'
 ];
 
-// A keyword containing anything other than [a-z0-9] is a multi-word phrase
-// or has punctuation (e.g. "sub total", "dine-in", "no.") — loose substring
-// matching on those is safe, since a menu item accidentally containing that
-// exact phrase is effectively impossible.
+// Matches keywords with punctuation/spaces (e.g. "sub total", "no.") — those
+// are safe to loose-match, since a menu name can't accidentally contain one.
 const PHRASE_OR_PUNCT_KEYWORD = /[^a-z0-9]/i;
 
 // Smart matching: avoid word collisions (e.g. "Tipat" vs "Tip")
@@ -98,22 +96,14 @@ function isKeywordMatch(text: string, kw: string): boolean {
     return new RegExp(`\\btotal\\b`, 'i').test(lc) && !lc.includes('subtotal') && !lc.includes('sub total');
   }
 
-  // "jam" (hour/time in Indonesian) is only metadata if this is a TIME LABEL
-  // line ("Jam : 22:12"), not a word inside a menu name ("1 NEW PACKAGE VIP
-  // 2 JAM" = a 2-hour package). Without this exception, every
-  // billiard/karaoke/futsal item whose name contains "... N JAM" gets
-  // skipped and disappears entirely from the order list.
+  // "jam" (hour) is metadata only in a TIME LABEL ("Jam : 22:12"), not inside
+  // a menu name like "... 2 JAM" (a 2-hour package) — those must stay.
   if (kw === 'jam') {
     return /\bjam\b\s*:?\s*\d{1,2}:\d{2}/i.test(lc) || /^jam\b/i.test(lc.trim());
   }
 
-  // Every other single-word keyword ALWAYS uses word boundaries (\b).
-  // Loose substring matching on a lone word is exactly what silently
-  // deleted real menu items before this rule existed: "2 JAM" (jam),
-  // "Nasi Goreng BILLzard" (bill), "VegeTABLE Fried Rice" (table),
-  // "CASHew Chicken" (cash), "Es DANA Kelapa" (dana), "OverTIME Burger"
-  // (time), "Nasi MEJA Rames" (meja) — all vanished from the order list
-  // before word-boundary matching was applied.
+  // Every other single-word keyword ALWAYS uses word boundaries (\b) — loose
+  // substring matching silently deleted real items like "Nasi Goreng BILLzard".
   if (!PHRASE_OR_PUNCT_KEYWORD.test(kw)) {
     return new RegExp(`\\b${kw}\\b`, 'i').test(lc);
   }
@@ -170,9 +160,8 @@ function tryParseItemLine(line: string): ParsedItem | null {
 
   if (/^\(.*\)$/.test(trimmed)) return null;
 
-  // Skip date / time / phone-number lines — these often become "ghost prices"
-  // during OCR. Only skip when there are few letters (not a menu name that
-  // happens to contain digits).
+  // Skip date/time/phone lines ("ghost prices" during OCR) — but only when
+  // there are few letters, so a menu name with digits isn't dropped.
   const looksLikeDateTime =
     /\b\d{1,2}[\/.\-]\d{1,2}([\/.\-]\d{2,4})?\b/.test(trimmed) ||
     /\b\d{1,2}:\d{2}\b/.test(trimmed);
@@ -184,9 +173,8 @@ function tryParseItemLine(line: string): ParsedItem | null {
     return null;
   }
 
-  // Convenience-store 4-column layout: "NAME  QTY  PRICE  TOTAL" (Circle K,
-  // Indomaret, Alfamart, etc). The name may contain digits (e.g. "VUSE GO
-  // 700"), so we take the last 3 numbers as qty/price/total and the rest as the name.
+  // Convenience-store 4-column layout: "NAME QTY PRICE TOTAL" (Circle K, etc).
+  // Name may contain digits, so take the last 3 numbers as qty/price/total.
   const trailing3 = trimmed.match(/(\d{1,3})\s+([\d.,]+)\s+([\d.,]+)\s*$/);
   if (trailing3) {
     const q = parseInt(trailing3[1], 10);
@@ -323,9 +311,8 @@ export function parseReceipt(rawText: string): ParsedReceipt {
   let finalService = service;
   let total = totalFound > 0 ? totalFound : subtotal + tax + service - discount;
 
-  // Detect TAX-ALREADY-INCLUDED prices (e.g. Circle K: "BKP SUDAH TERMASUK PPN").
-  // If the item total roughly equals the grand total, tax/service aren't
-  // added on top — if we still added them, the total would double-count.
+  // Detect tax-already-included prices (e.g. "BKP SUDAH TERMASUK PPN") — if
+  // items ≈ grand total, tax/service must not be added again on top.
   const base = calculatedSubtotal > 0 ? calculatedSubtotal : subtotal;
   const taxIncludedKeyword = /termasuk\s+(ppn|pajak|tax)|sudah\s+termasuk|incl(usive)?/i.test(
     rawText,
@@ -348,11 +335,8 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     }
   }
 
-  // Sanity check: if the numbers we read don't add up, OCR almost certainly
-  // misread something (garbled name/number, or the "Subtotal/Tax/TOTAL"
-  // lines failed to be detected at all). Dot-matrix POS printer fonts cause
-  // this a lot even on a sharp, straight photo — tell the user to check
-  // manually instead of silently splitting the bill with wrong numbers.
+  // Sanity check: if the numbers don't add up, OCR likely misread something —
+  // warn the user instead of silently splitting the bill with wrong numbers.
   const warnings: string[] = [];
   const fmtNum = (n: number) => Math.round(n).toLocaleString("id-ID");
 

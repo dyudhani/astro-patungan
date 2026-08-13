@@ -18,11 +18,8 @@ export interface SplitResult {
   grandTotal: number;
 }
 
-/**
- * Compute each person's share. Every item is split proportionally by share
- * (person's qty / item's total shares), then tax/service/discount are split
- * proportionally against each person's subtotal.
- */
+// Each item is split by share (person's qty / item's total shares), then
+// tax/service/discount are split proportionally against each subtotal.
 export function calculateSplit(bill: Bill, people: Person[]): SplitResult {
   const billSubtotal = bill.items.reduce((s, i) => s + i.price * i.qty, 0);
   const grandTotal = Math.max(
@@ -68,11 +65,8 @@ export function calculateSplit(bill: Bill, people: Person[]): SplitResult {
   return { results, billSubtotal, grandTotal };
 }
 
-/**
- * Reconcile: apply the rounding difference to one person so the collected
- * total EXACTLY matches the bill (prefer the payer, otherwise the largest
- * share). Mutates the results array in place.
- */
+// Applies the rounding difference to one person (payer, else largest share)
+// so the collected total exactly matches the bill. Mutates in place.
 export function applyReconcile(
   results: PersonResult[],
   grandTotal: number,

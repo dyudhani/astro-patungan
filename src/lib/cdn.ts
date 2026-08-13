@@ -1,8 +1,5 @@
-// Lazy-load third-party CDN scripts only when actually needed, instead of
-// blocking every page load with a multi-MB download (Tesseract.js alone is
-// ~2-5MB) that visitors who never touch OCR — e.g. "bagi rata total saja" —
-// pay for regardless. SRI hashes are kept on the dynamically created tags
-// too, matching what used to be on the static <script> tags in Layout.astro.
+// Lazy-loads third-party CDN scripts only when actually needed (Tesseract.js
+// alone is ~2-5MB), keeping the same SRI hashes as the old static tags.
 
 interface ScriptSpec {
   src: string;
@@ -28,9 +25,8 @@ function loadScriptOnce(src: string, integrity: string): Promise<void> {
 
 const RETRY_DELAYS_MS = [500, 1500];
 
-// Retries a couple of times before giving up — the load only happens the
-// moment a user taps scan/export, often on flaky venue wifi, so a single
-// transient blip shouldn't need a full page reload to recover from.
+// Retries a couple of times before giving up — this runs on flaky venue
+// wifi, so a single transient blip shouldn't force a full page reload.
 async function loadScriptWithRetry(spec: ScriptSpec): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -49,10 +45,8 @@ function loadScript(spec: ScriptSpec): Promise<void> {
 
   const promise = loadScriptWithRetry(spec);
   loading.set(spec.src, promise);
-  // A failed load (even after retries) must NOT stay cached — otherwise
-  // every future attempt (e.g. clicking "Scan ulang" again) instantly
-  // replays the same stale rejection forever, without ever touching the
-  // network again, instead of actually retrying.
+  // A failed load must NOT stay cached, or every future call replays the
+  // same stale rejection forever instead of actually retrying the network.
   promise.catch(() => loading.delete(spec.src));
   return promise;
 }

@@ -2,9 +2,8 @@
 
 export type RoundMode = "up" | "nearest" | "down";
 
-// Rounding config (mutable object — changed from the result-step UI).
-//   to: rounding step (1000/500/100, or 1 = no rounding).
-//   mode: "up" round up, "nearest" round to nearest (fairest), "down" round down.
+// Rounding config (mutable, changed from the result-step UI): `to` is the
+// step (1000/500/100, or 1 = none), `mode` is up/nearest/down.
 export const roundCfg: { to: number; mode: RoundMode } = {
   to: 1000,
   mode: "nearest",

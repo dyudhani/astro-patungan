@@ -57,15 +57,8 @@ const progressWrap = $("progress-wrap");
 const progressBar = $("progress-bar");
 const progressText = $("progress-text");
 
-// Show parseReceipt's number-consistency warnings (e.g. item total vs.
-// receipt total far apart) — so the user checks manually before splitting
-// the bill, instead of silently using misread numbers.
-//
-// Rendered into #scan-warning INSIDE step-bill (not step-upload's
-// uploadError) on purpose: right after a scan we auto-scroll to step-bill
-// with `scrollIntoView({ block: "start" })`, which pins step-bill to the top
-// of the viewport — anything above it (like uploadError, still in
-// step-upload) ends up scrolled out of view and the user never sees it.
+// Shows parseReceipt's number warnings. Renders into #scan-warning inside
+// step-bill, not step-upload's uploadError, which scrolls out of view.
 function renderScanWarnings(warnings: string[]) {
   const el = $("scan-warning");
   if (warnings.length === 0) {

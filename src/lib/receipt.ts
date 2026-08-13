@@ -1,7 +1,5 @@
-// Digital receipt HTML — shared by PDF (print) & PNG export. Pure: takes the
-// data it needs as parameters instead of closing over app.ts's mutable
-// state, so it's independently testable and has a single responsibility
-// (render a receipt), separate from state management / DOM wiring.
+// Digital receipt HTML — shared by PDF (print) & PNG export. Pure: takes
+// data as parameters instead of closing over app.ts's mutable state.
 
 import type { PersonResult } from "./types";
 import { escapeHtml } from "./dom";

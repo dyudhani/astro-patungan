@@ -2,9 +2,8 @@ import { describe, it, expect } from "vitest";
 import { calculateSplit, applyReconcile, itemSharersCount, itemTotalShares } from "./calc";
 import type { Bill, Person } from "./types";
 
-// Money-math correctness is more critical than the OCR parser — a bug here
-// means real people get charged the wrong amount. This had zero test
-// coverage before, despite being the actual "split bill" logic.
+// Money-math correctness matters most here — a bug means someone gets
+// charged the wrong amount. Had zero test coverage before this file.
 
 function bill(items: Bill["items"], tax = 0, service = 0, discount = 0): Bill {
   return { items, tax, service, discount };
