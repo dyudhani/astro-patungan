@@ -64,6 +64,12 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         --accent: #10b981;
         --accent-soft: #d1fae5;
 
+        /* Status: bahaya (hapus, error) & peringatan */
+        --danger: #dc2626;
+        --danger-soft: #fee2e2;
+        --warning: #d97706;
+        --warning-soft: #fef3c7;
+
         /* Garis dan batas */
         --line: #e2e8f0;
         --line-soft: #f1f5f9;
@@ -85,6 +91,10 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         --ink-muted: #8b97aa;
         --accent: #10b981;
         --accent-soft: #0e3b2e;
+        --danger: #f87171;
+        --danger-soft: #3f1d1d;
+        --warning: #fbbf24;
+        --warning-soft: #3f2d0a;
         --line: #243049;
         --line-soft: #1a2540;
         --shadow-sm:
@@ -482,14 +492,14 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       }
 
       .summary {
-        background: var(--ink);
-        color: var(--bg);
+        background: #0f172a;
+        color: #f8fafc;
         border-radius: var(--radius);
         padding: 28px;
         margin-top: 20px;
       }
       .summary h2 {
-        color: var(--bg);
+        color: #f8fafc;
         font-size: 26px;
         margin-bottom: 4px;
       }
@@ -504,16 +514,16 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
       }
 
       .error {
-        background: #fef2f2;
-        color: #dc2626;
+        background: var(--danger-soft);
+        color: var(--danger);
         padding: 12px 14px;
         border-radius: 9px;
         font-size: 14px;
         margin-top: 12px;
       }
       .info {
-        background: #fef3c7;
-        color: #d97706;
+        background: var(--warning-soft);
+        color: var(--warning);
         padding: 10px 14px;
         border-radius: 9px;
         font-size: 13px;
