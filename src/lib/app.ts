@@ -20,6 +20,7 @@ import {
 } from "./share";
 import { setupThemeToggle } from "./theme";
 import { registerServiceWorker } from "./pwa";
+import { showAlert, showConfirm } from "./modal";
 
 // html-to-image via CDN (for PNG export).
 declare const htmlToImage: {
@@ -129,10 +130,10 @@ $("btn-paste").addEventListener("click", () => {
   if (!pastePanel.classList.contains("hidden"))
     $<HTMLTextAreaElement>("paste-text").focus();
 });
-$("btn-parse-text").addEventListener("click", () => {
+$("btn-parse-text").addEventListener("click", async () => {
   const txt = $<HTMLTextAreaElement>("paste-text").value.trim();
   if (!txt) {
-    alert("Tempel teks struk dulu.");
+    await showAlert("Tempel teks struk dulu.");
     return;
   }
   const parsed = parseReceipt(txt);
@@ -149,7 +150,7 @@ $("btn-parse-text").addEventListener("click", () => {
     discount: parsed.discount,
   };
   if (bill.items.length === 0)
-    alert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
+    await showAlert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
   renderScanWarnings(parsed.warnings);
   pastePanel.classList.add("hidden");
   renderBillStep();
@@ -177,18 +178,18 @@ btnSkip.parentElement?.appendChild(totalOnlyPanel);
 $("btn-total-only").addEventListener("click", () =>
   totalOnlyPanel.classList.toggle("hidden"),
 );
-$("to-go").addEventListener("click", () => {
+$("to-go").addEventListener("click", async () => {
   const total = Math.max(0, Number($<HTMLInputElement>("to-total").value) || 0);
   const names = $<HTMLTextAreaElement>("to-names")
     .value.split(/[,\n]/)
     .map((s) => s.trim())
     .filter(Boolean);
   if (total <= 0) {
-    alert("Isi total bill dulu.");
+    await showAlert("Isi total bill dulu.");
     return;
   }
   if (names.length === 0) {
-    alert("Isi nama teman dulu, pisahkan dengan koma (mis: Andi, Budi, Citra).");
+    await showAlert("Isi nama teman dulu, pisahkan dengan koma (mis: Andi, Budi, Citra).");
     return;
   }
   bill = {
@@ -245,8 +246,8 @@ function renderHistory() {
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;">
         <div style="font-size:13px;color:var(--ink);"><b>${fmtIDR(h.grand || 0)}</b> · ${h.peopleCount || 0} orang<br/><span style="color:var(--ink-muted);font-size:12px;">${when}</span></div>
         <div style="display:flex;gap:6px;">
-          <button type="button" data-hist-open="${idx}" class="btn" style="background:#10B981;color:#fff;font-size:12px;padding:6px 12px;">Buka</button>
-          <button type="button" data-hist-del="${idx}" class="btn" style="background:#FEE2E2;color:#EF4444;font-size:12px;padding:6px 10px;">Hapus</button>
+          <button type="button" data-hist-open="${idx}" class="btn" style="background:var(--accent);color:#fff;font-size:12px;padding:6px 12px;">Buka</button>
+          <button type="button" data-hist-del="${idx}" class="btn" style="background:var(--danger-soft);color:var(--danger);font-size:12px;padding:6px 10px;">Hapus</button>
         </div>
       </div>`;
     })
@@ -407,27 +408,27 @@ function renderBillStep() {
     row.style.flexDirection = "column";
     row.style.gap = "8px";
     row.style.padding = "14px 0";
-    row.style.borderBottom = "1px solid #E2E8F0";
+    row.style.borderBottom = "1px solid var(--line)";
 
     row.innerHTML = `
       <div style="display:flex; gap:6px; width: 100%; align-items:center;">
-        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" aria-label="Nama pesanan" style="flex:1; color:#0F172A; font-weight:600;" />
-        <button data-move="up" data-id="${item.id}" type="button" title="Naik" aria-label="Pindah pesanan ke atas" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
-        <button data-move="down" data-id="${item.id}" type="button" title="Turun" aria-label="Pindah pesanan ke bawah" style="background:#F1F5F9; color:#0F172A; border:1px solid #E2E8F0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
-        <button data-dup="${item.id}" type="button" title="Duplikat" aria-label="Duplikat pesanan" style="background:#ECFDF5; color:#059669; border:1px solid #A7F3D0; border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
-        <button class="person-remove" data-remove="${item.id}" type="button" aria-label="Hapus pesanan" style="background:#FEE2E2; color:#EF4444; border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
+        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" aria-label="Nama pesanan" style="flex:1; color:var(--ink); font-weight:600;" />
+        <button data-move="up" data-id="${item.id}" type="button" title="Naik" aria-label="Pindah pesanan ke atas" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
+        <button data-move="down" data-id="${item.id}" type="button" title="Turun" aria-label="Pindah pesanan ke bawah" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
+        <button data-dup="${item.id}" type="button" title="Duplikat" aria-label="Duplikat pesanan" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-soft); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
+        <button class="person-remove" data-remove="${item.id}" type="button" aria-label="Hapus pesanan" style="background:var(--danger-soft); color:var(--danger); border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
       </div>
       <div style="display:flex; align-items:center; gap:6px; width: 100%;">
-        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" aria-label="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:#0F172A; border:1px solid #CBD5E1;" />
-        <span style="color:#64748B; font-size:14px; font-weight:bold;">×</span>
+        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" aria-label="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:var(--ink); border:1px solid var(--line);" />
+        <span style="color:var(--ink-muted); font-size:14px; font-weight:bold;">×</span>
         <div style="position:relative; flex:1; max-width: 120px;">
-          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#64748B;">@</span>
-          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" aria-label="Harga satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:#0F172A; border:1px solid #CBD5E1;" />
+          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:var(--ink-muted);">@</span>
+          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" aria-label="Harga satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:var(--ink); border:1px solid var(--line);" />
         </div>
-        <span style="color:#64748B; font-size:14px; font-weight:bold;">=</span>
+        <span style="color:var(--ink-muted); font-size:14px; font-weight:bold;">=</span>
         <div style="position:relative; flex:1;">
-          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:#10B981; font-weight:bold;">Rp</span>
-          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" aria-label="Harga total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:#10B981; font-weight:bold; background:#F0FDF4; border:1px solid #A7F3D0;" />
+          <span style="position:absolute; left:8px; top:10px; font-size:12px; color:var(--accent); font-weight:bold;">Rp</span>
+          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" aria-label="Harga total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:var(--accent); font-weight:bold; background:var(--accent-soft); border:1px solid var(--accent-soft);" />
         </div>
       </div>
     `;
@@ -573,9 +574,9 @@ $("btn-add-item").addEventListener("click", () => {
   $(id).addEventListener("change", updateBillTotals),
 );
 
-$("btn-to-people").addEventListener("click", () => {
+$("btn-to-people").addEventListener("click", async () => {
   if (bill.items.length === 0) {
-    alert("Tambah minimal 1 item dulu");
+    await showAlert("Tambah minimal 1 item dulu");
     return;
   }
   if (people.length === 0) {
@@ -601,19 +602,19 @@ function renderPeopleStep() {
   const peopleManager = document.createElement("div");
   peopleManager.style.marginBottom = "20px";
   peopleManager.style.paddingBottom = "20px";
-  peopleManager.style.borderBottom = "2px dashed #E2E8F0";
+  peopleManager.style.borderBottom = "2px dashed var(--line)";
 
   const tagsHtml = people.map(p => `
-    <div style="display:inline-flex; align-items:center; background:#F1F5F9; border:1px solid #CBD5E1; color:#0F172A; padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
-      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" aria-label="Nama teman" style="background:transparent; border:none; outline:none; color:#0F172A; font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
-      <button type="button" data-remove-person="${p.id}" aria-label="Hapus teman ${escapeHtml(p.name)}" style="margin-left:6px; color:#EF4444; font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
+    <div style="display:inline-flex; align-items:center; background:var(--line-soft); border:1px solid var(--line); color:var(--ink); padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
+      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" aria-label="Nama teman" style="background:transparent; border:none; outline:none; color:var(--ink); font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
+      <button type="button" data-remove-person="${p.id}" aria-label="Hapus teman ${escapeHtml(p.name)}" style="margin-left:6px; color:var(--danger); font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
     </div>
   `).join("");
 
   peopleManager.innerHTML = `
-    <div style="font-size:14px; font-weight:bold; color:#0F172A; margin-bottom:10px;">Daftar Teman Patungan:</div>
+    <div style="font-size:14px; font-weight:bold; color:var(--ink); margin-bottom:10px;">Daftar Teman Patungan:</div>
     <div style="display:flex; flex-wrap:wrap;">
-       ${people.length > 0 ? tagsHtml : '<span style="color:#64748B; font-size:13px; font-style:italic;">Belum ada yang gabung. Tambah di atas 👆</span>'}
+       ${people.length > 0 ? tagsHtml : '<span style="color:var(--ink-muted); font-size:13px; font-style:italic;">Belum ada yang gabung. Tambah di atas 👆</span>'}
     </div>
   `;
   list.appendChild(peopleManager);
@@ -627,10 +628,10 @@ function renderPeopleStep() {
     (it) => getItemSharersCount(it.id) === 0,
   );
   controls.innerHTML = `
-    <button type="button" id="btn-split-global" style="width:100%; font-size:13px; padding:10px; border-radius:8px; border:1px dashed #10B981; background:#ECFDF5; color:#059669; font-weight:600; cursor:pointer; margin-bottom:${unassigned.length ? "10px" : "0"};">⚖️ Bagikan SEMUA pesanan rata ke semua teman</button>
+    <button type="button" id="btn-split-global" style="width:100%; font-size:13px; padding:10px; border-radius:8px; border:1px dashed var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer; margin-bottom:${unassigned.length ? "10px" : "0"};">⚖️ Bagikan SEMUA pesanan rata ke semua teman</button>
     ${
       unassigned.length
-        ? `<div style="background:#FEF3C7; border:1px solid #FCD34D; color:#92400E; padding:10px 12px; border-radius:8px; font-size:13px;">⚠️ <b>${unassigned.length} pesanan belum dibagi</b>: ${unassigned.map((i) => escapeHtml(i.name || "(tanpa nama)")).join(", ")}</div>`
+        ? `<div style="background:var(--warning-soft); border:1px solid var(--warning); color:var(--warning); padding:10px 12px; border-radius:8px; font-size:13px;">⚠️ <b>${unassigned.length} pesanan belum dibagi</b>: ${unassigned.map((i) => escapeHtml(i.name || "(tanpa nama)")).join(", ")}</div>`
         : ""
     }`;
   list.appendChild(controls);
@@ -649,21 +650,21 @@ function renderPeopleStep() {
         const perHead = totalShares > 0 ? (item.total / totalShares) * qty : 0;
 
         return `
-          <div class="chip ${active ? "active" : ""}" style="display:flex; justify-content:space-between; align-items:center; padding-right:10px; border:${active ? '2px solid #10B981' : '1px solid #E2E8F0'}; background:#FFFFFF;">
+          <div class="chip ${active ? "active" : ""}" style="display:flex; justify-content:space-between; align-items:center; padding-right:10px; border:${active ? '2px solid var(--accent)' : '1px solid var(--line)'}; background:var(--bg-card);">
             <div style="flex:1; cursor:pointer;" class="chip-main" data-person="${person.id}" data-item="${item.id}">
               <div class="chip-info">
-                <div class="chip-name" style="display:flex; align-items:center; color:#0F172A; font-weight:600;">
+                <div class="chip-name" style="display:flex; align-items:center; color:var(--ink); font-weight:600;">
                   👤 ${escapeHtml(person.name)}
                 </div>
-                <div class="chip-meta" style="color:#0F172A; opacity:0.7;">
-                  ${active ? `<span style="color:#10B981; font-weight:bold; opacity:1;">Tanggungan: ${fmtIDR(perHead)}</span>` : "Belum ditagih"}
+                <div class="chip-meta" style="color:var(--ink); opacity:0.7;">
+                  ${active ? `<span style="color:var(--accent); font-weight:bold; opacity:1;">Tanggungan: ${fmtIDR(perHead)}</span>` : "Belum ditagih"}
                 </div>
               </div>
             </div>
             <div class="chip-actions" style="display:flex; align-items:center; gap:8px;">
-              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" aria-label="Kurangi porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid #0F172A; background:#FFFFFF; color:#0F172A; font-weight:bold; cursor:pointer;">-</button>
-              <span style="font-weight:bold; min-width:12px; text-align:center; color:#0F172A;">${qty}</span>
-              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" aria-label="Tambah porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid #10B981; background:#10B981; color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
+              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" aria-label="Kurangi porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--ink); background:var(--bg-card); color:var(--ink); font-weight:bold; cursor:pointer;">-</button>
+              <span style="font-weight:bold; min-width:12px; text-align:center; color:var(--ink);">${qty}</span>
+              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" aria-label="Tambah porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--accent); background:var(--accent); color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
             </div>
           </div>
         `;
@@ -671,21 +672,21 @@ function renderPeopleStep() {
       .join("");
 
     card.innerHTML = `
-      <div class="item-head" style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed #CBD5E1; display:flex; justify-content:space-between; align-items:flex-start;">
+      <div class="item-head" style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed var(--line); display:flex; justify-content:space-between; align-items:flex-start;">
         <div>
-          <div style="font-weight:bold; font-size:16px; color:#0F172A;">🍽️ ${escapeHtml(item.name || "(Tanpa Nama)")}</div>
-          <div style="font-size:13px; color:#64748B; margin-top:4px;">${item.qty} Qty × ${fmtIDR(item.price)}</div>
+          <div style="font-weight:bold; font-size:16px; color:var(--ink);">🍽️ ${escapeHtml(item.name || "(Tanpa Nama)")}</div>
+          <div style="font-size:13px; color:var(--ink-muted); margin-top:4px;">${item.qty} Qty × ${fmtIDR(item.price)}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-weight:900; font-size:16px; color:#10B981;">${fmtIDR(item.total)}</div>
+          <div style="font-weight:900; font-size:16px; color:var(--accent);">${fmtIDR(item.total)}</div>
           ${sharersCount > 0 
-            ? `<div style="font-size:10px; font-weight:600; background:#D1FAE5; color:#059669; padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Ditagih ke ${sharersCount} teman</div>` 
-            : `<div style="font-size:10px; font-weight:600; background:#FEE2E2; color:#DC2626; padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Belum ada yang bayar</div>`}
+            ? `<div style="font-size:10px; font-weight:600; background:var(--accent-soft); color:var(--accent); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Ditagih ke ${sharersCount} teman</div>` 
+            : `<div style="font-size:10px; font-weight:600; background:var(--danger-soft); color:var(--danger); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Belum ada yang bayar</div>`}
         </div>
       </div>
       <div style="display:flex; gap:8px; margin-bottom:10px;">
-        <button type="button" class="btn-split-all" data-item="${item.id}" style="flex:1; font-size:12px; padding:7px; border-radius:6px; border:1px solid #10B981; background:#ECFDF5; color:#059669; font-weight:600; cursor:pointer;">⚖️ Bagi rata ke semua</button>
-        ${sharersCount > 0 ? `<button type="button" class="btn-clear-item" data-item="${item.id}" style="font-size:12px; padding:7px 12px; border-radius:6px; border:1px solid #E2E8F0; background:#FFFFFF; color:#64748B; cursor:pointer;">Kosongkan</button>` : ""}
+        <button type="button" class="btn-split-all" data-item="${item.id}" style="flex:1; font-size:12px; padding:7px; border-radius:6px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer;">⚖️ Bagi rata ke semua</button>
+        ${sharersCount > 0 ? `<button type="button" class="btn-clear-item" data-item="${item.id}" style="font-size:12px; padding:7px 12px; border-radius:6px; border:1px solid var(--line); background:var(--bg-card); color:var(--ink-muted); cursor:pointer;">Kosongkan</button>` : ""}
       </div>
       <div class="chip-grid" style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
     `;
@@ -815,17 +816,17 @@ function setupBankInputs() {
     bankHtml.id = "bank-details-container";
     bankHtml.style.marginBottom = "20px";
     bankHtml.style.padding = "15px";
-    bankHtml.style.background = "#FFFFFF"; 
+    bankHtml.style.background = "var(--bg-card)";
     bankHtml.style.borderRadius = "8px";
-    bankHtml.style.border = "1px solid #E2E8F0";
+    bankHtml.style.border = "1px solid var(--line)";
     bankHtml.innerHTML = `
-      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:#0F172A; font-weight:600;">💳 Detail Pembayaran (Muncul Paling Atas PDF)</h4>
+      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:var(--ink); font-weight:600;">💳 Detail Pembayaran (Muncul Paling Atas PDF)</h4>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" aria-label="Nama bank" style="flex:1; min-width:120px; color:#0F172A;" />
-        <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" aria-label="Nomor rekening" style="flex:1; min-width:150px; color:#0F172A;" />
-        <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" aria-label="Nama pemilik rekening" style="flex:1; min-width:150px; color:#0F172A;" />
+        <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" aria-label="Nama bank" style="flex:1; min-width:120px; color:var(--ink);" />
+        <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" aria-label="Nomor rekening" style="flex:1; min-width:150px; color:var(--ink);" />
+        <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" aria-label="Nama pemilik rekening" style="flex:1; min-width:150px; color:var(--ink);" />
       </div>
-      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" aria-label="Link pembayaran" style="width:100%; margin-top:10px; color:#0F172A;" />
+      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" aria-label="Link pembayaran" style="width:100%; margin-top:10px; color:var(--ink);" />
     `;
     $("step-result").insertBefore(bankHtml, $("summary-list"));
     ["bank-name-input", "bank-acc-input", "bank-holder-input", "bank-link-input"].forEach(
@@ -858,16 +859,16 @@ function setupResultExtras() {
     const s = document.createElement("div");
     s.id = "result-settings";
     s.style.cssText =
-      "background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:14px;margin-top:16px;font-size:13px;color:#0F172A;";
+      "background:var(--bg-card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:16px;font-size:13px;color:var(--ink);";
     s.innerHTML = `
       <div style="font-weight:600;margin-bottom:10px;">⚙️ Pengaturan pembulatan</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <select id="round-mode" class="input" aria-label="Mode pembulatan" style="flex:1;min-width:130px;color:#0F172A;cursor:pointer;">
+        <select id="round-mode" class="input" aria-label="Mode pembulatan" style="flex:1;min-width:130px;color:var(--ink);cursor:pointer;">
           <option value="nearest">Ke terdekat</option>
           <option value="up">Ke atas</option>
           <option value="down">Ke bawah</option>
         </select>
-        <select id="round-to" class="input" aria-label="Kelipatan pembulatan" style="flex:1;min-width:110px;color:#0F172A;cursor:pointer;">
+        <select id="round-to" class="input" aria-label="Kelipatan pembulatan" style="flex:1;min-width:110px;color:var(--ink);cursor:pointer;">
           <option value="1000">per 1.000</option>
           <option value="500">per 500</option>
           <option value="100">per 100</option>
@@ -897,10 +898,10 @@ function setupResultExtras() {
     const wrap = document.createElement("div");
     wrap.id = "settle-container";
     wrap.style.cssText =
-      "background:#FFFFFF;border:1px solid #E2E8F0;border-radius:12px;padding:16px;margin-top:16px;";
+      "background:var(--bg-card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;";
     wrap.innerHTML = `
-      <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:8px;">🤝 Siapa yang nalangin / bayar duluan?</div>
-      <select id="settle-payer" class="input" aria-label="Pilih yang menalangin" style="color:#0F172A;cursor:pointer;"></select>
+      <div style="font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px;">🤝 Siapa yang nalangin / bayar duluan?</div>
+      <select id="settle-payer" class="input" aria-label="Pilih yang menalangin" style="color:var(--ink);cursor:pointer;"></select>
       <div id="settle-list" style="margin-top:12px;"></div>`;
     insertIntoResultStep(wrap);
     $("settle-payer").addEventListener("change", () => {
@@ -919,10 +920,10 @@ function setupResultExtras() {
       `<button type="button" id="${id}" class="btn" style="flex:1;min-width:120px;background:${bg};color:${fg};font-weight:bold;${extra}">${label}</button>`;
     row.innerHTML =
       btn("btn-share-wa", "📲 WhatsApp", "#25D366", "#fff") +
-      btn("btn-copy", "📋 Salin teks", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;") +
+      btn("btn-copy", "📋 Salin teks", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
       btn("btn-png", "🖼️ PNG", "#0F172A", "#fff") +
-      btn("btn-csv", "⬇️ CSV", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;") +
-      btn("btn-link", "🔗 Salin link", "#F1F5F9", "#0F172A", "border:1px solid #E2E8F0;");
+      btn("btn-csv", "⬇️ CSV", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
+      btn("btn-link", "🔗 Salin link", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);");
     insertIntoResultStep(row);
 
     $("btn-share-wa").addEventListener("click", () => {
@@ -976,7 +977,7 @@ async function flashCopy(
       b.textContent = base;
     }, 1500);
   } catch {
-    alert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
+    await showAlert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
   }
 }
 
@@ -999,7 +1000,7 @@ function renderSettle() {
   const list = $("settle-list");
   if (!list) return;
   if (!payerName) {
-    list.innerHTML = `<div style="font-size:13px;color:#64748B;">Pilih satu orang yang nalangin — nanti muncul siapa transfer berapa ke dia.</div>`;
+    list.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);">Pilih satu orang yang nalangin — nanti muncul siapa transfer berapa ke dia.</div>`;
     return;
   }
   const others = lastResults.filter(
@@ -1007,13 +1008,13 @@ function renderSettle() {
   );
   const totalIn = others.reduce((s, r) => s + r.totalRounded, 0);
   list.innerHTML = `
-    <div style="font-size:13px;color:#0F172A;margin-bottom:8px;">${escapeHtml(payerName)} nalangin semua, akan terima total <b>${fmtIDR(totalIn)}</b>:</div>
+    <div style="font-size:13px;color:var(--ink);margin-bottom:8px;">${escapeHtml(payerName)} nalangin semua, akan terima total <b>${fmtIDR(totalIn)}</b>:</div>
     ${others
       .map(
         (r) => `
-      <div style="display:flex;justify-content:space-between;padding:8px 10px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;margin-bottom:6px;font-size:14px;color:#0F172A;">
+      <div style="display:flex;justify-content:space-between;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:14px;color:var(--ink);">
         <span>${escapeHtml(r.name)} → ${escapeHtml(payerName)}</span>
-        <span class="mono" style="font-weight:700;color:#10B981;">${fmtIDR(r.totalRounded)}</span>
+        <span class="mono" style="font-weight:700;color:var(--accent);">${fmtIDR(r.totalRounded)}</span>
       </div>`,
       )
       .join("")}`;
@@ -1186,12 +1187,12 @@ function showRestoreBanner() {
   const banner = document.createElement("div");
   banner.id = "restore-banner";
   banner.style.cssText =
-    "background:#FFFFFF;border:1px solid #10B981;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;";
+    "background:var(--bg-card);border:1px solid var(--accent);border-radius:10px;padding:14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;";
   banner.innerHTML = `
-    <div style="color:#0F172A;font-size:14px;">💾 Ada sesi tersimpan${when ? ` <span style="color:#64748B;">(${when})</span>` : ""}. Lanjutkan?</div>
+    <div style="color:var(--ink);font-size:14px;">💾 Ada sesi tersimpan${when ? ` <span style="color:var(--ink-muted);">(${when})</span>` : ""}. Lanjutkan?</div>
     <div style="display:flex;gap:8px;">
-      <button type="button" id="restore-yes" class="btn" style="background:#10B981;color:#fff;padding:8px 16px;font-size:14px;">Lanjutkan</button>
-      <button type="button" id="restore-no" class="btn" style="background:#F1F5F9;color:#0F172A;padding:8px 16px;font-size:14px;">Hapus</button>
+      <button type="button" id="restore-yes" class="btn" style="background:var(--accent);color:#fff;padding:8px 16px;font-size:14px;">Lanjutkan</button>
+      <button type="button" id="restore-no" class="btn" style="background:var(--line-soft);color:var(--ink);padding:8px 16px;font-size:14px;">Hapus</button>
     </div>`;
   const up = $("step-upload");
   up.parentElement?.insertBefore(banner, up);
@@ -1224,36 +1225,36 @@ function renderResult() {
   sumList.innerHTML = results
     .map(
       (r) => `
-    <div class="summary-row" style="display:flex; flex-direction:column; padding:16px; border:1px solid #E2E8F0; border-radius:12px; background:#FFFFFF; box-shadow:0 1px 3px rgba(0,0,0,0.05); ${paid[r.name] ? "opacity:0.6;" : ""}">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:2px dashed #E2E8F0; padding-bottom:8px;">
-        <div style="font-size:16px; font-weight:bold; color:#0F172A;">
-          👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:#D1FAE5;color:#059669;padding:2px 8px;border-radius:6px;margin-left:6px;">LUNAS</span>` : ""}
+    <div class="summary-row" style="display:flex; flex-direction:column; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--bg-card); box-shadow:0 1px 3px rgba(0,0,0,0.05); ${paid[r.name] ? "opacity:0.6;" : ""}">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:2px dashed var(--line); padding-bottom:8px;">
+        <div style="font-size:16px; font-weight:bold; color:var(--ink);">
+          👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:var(--accent-soft);color:var(--accent);padding:2px 8px;border-radius:6px;margin-left:6px;">LUNAS</span>` : ""}
         </div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#64748B;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-muted);cursor:pointer;">
           <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> Lunas
         </label>
       </div>
 
-      <div style="font-size:13px; color:#0F172A; display:flex; flex-direction:column; gap:6px;">
+      <div style="font-size:13px; color:var(--ink); display:flex; flex-direction:column; gap:6px;">
         ${r.items.map((i) => `
-          <div style="display:flex; justify-content:space-between; color:#0F172A;">
-            <span>• ${escapeHtml(i.name)} ${i.qty < i.totalShares ? `<span style="color:#0F172A; opacity:0.6; font-weight:500;">(${i.qty}/${i.totalShares})</span>` : ''}</span>
+          <div style="display:flex; justify-content:space-between; color:var(--ink);">
+            <span>• ${escapeHtml(i.name)} ${i.qty < i.totalShares ? `<span style="color:var(--ink); opacity:0.6; font-weight:500;">(${i.qty}/${i.totalShares})</span>` : ''}</span>
             <span class="mono" style="font-weight:500;">${fmtIDR(i.share)}</span>
           </div>
         `).join("")}
 
-        <div style="height:1px; background:#E2E8F0; margin:6px 0;"></div>
+        <div style="height:1px; background:var(--line); margin:6px 0;"></div>
 
-        <div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
-        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
-        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
-        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:#10B981; font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
-        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:#0F172A; opacity:0.6;"><span>Pembulatan</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
+        <div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
+        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
+        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
+        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--accent); font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
+        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.6;"><span>Pembulatan</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
       </div>
 
-      <div style="margin-top:12px; padding-top:12px; border-top:1px solid #E2E8F0; display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-weight:bold; font-size:14px; color:#0F172A;">TOTAL BAYAR:</span>
-        <span class="mono" style="font-weight:800; font-size:18px; color:#FFFFFF; background:#10B981; padding:6px 14px; border-radius:8px;">${fmtIDR(r.totalRounded)}</span>
+      <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-weight:bold; font-size:14px; color:var(--ink);">TOTAL BAYAR:</span>
+        <span class="mono" style="font-weight:800; font-size:18px; color:#FFFFFF; background:var(--accent); padding:6px 14px; border-radius:8px;">${fmtIDR(r.totalRounded)}</span>
       </div>
     </div>
   `,
@@ -1265,7 +1266,7 @@ function renderResult() {
   const diffSign = diff > 0 ? "+" : "";
 
   $("summary-sub").innerHTML = `
-    <div style="background:#FFFFFF; border:1px solid #E2E8F0; padding:12px; border-radius:8px; text-align:center; margin-top:10px; color:#0F172A;">
+    <div style="background:var(--bg-card); border:1px solid var(--line); padding:12px; border-radius:8px; text-align:center; margin-top:10px; color:var(--ink);">
       Total tagihan asli: <b>${fmtIDR(grandTotal)}</b><br/>
       Total terkumpul setelah pembulatan: <b>${fmtIDR(totalRounded)}</b>
       <span style="opacity:0.7; font-size:12px;">(Selisih: ${diffSign}${fmtIDR(diff)})</span>
@@ -1276,9 +1277,9 @@ function renderResult() {
   scheduleSave();
 }
 
-$("btn-calculate").addEventListener("click", () => {
+$("btn-calculate").addEventListener("click", async () => {
   if (people.length === 0) {
-    alert("Tambah minimal 1 orang dulu");
+    await showAlert("Tambah minimal 1 orang dulu");
     return;
   }
   const unassigned = bill.items.filter(
@@ -1286,12 +1287,11 @@ $("btn-calculate").addEventListener("click", () => {
   );
   if (unassigned.length > 0) {
     const names = unassigned.map((i) => i.name || "(tanpa nama)").join(", ");
-    if (
-      !confirm(
-        `${unassigned.length} pesanan belum dibagi ke siapa pun:\n${names}\n\nKalau dilanjut, pesanan itu tidak ditagih ke siapa pun (total terkumpul jadi kurang dari bill). Tetap lanjut?`,
-      )
-    )
-      return;
+    const proceed = await showConfirm(
+      `${unassigned.length} pesanan belum dibagi ke siapa pun:\n${names}\n\nKalau dilanjut, pesanan itu tidak ditagih ke siapa pun (total terkumpul jadi kurang dari bill). Tetap lanjut?`,
+      { confirmLabel: "Tetap lanjut", cancelLabel: "Batal" },
+    );
+    if (!proceed) return;
   }
   renderResult();
   pushHistory();
@@ -1330,7 +1330,7 @@ async function downloadPNG() {
       await loadHtmlToImage();
     } catch (e) {
       console.error(e);
-      alert("Gagal memuat modul gambar. Cek koneksi lalu coba lagi.");
+      await showAlert("Gagal memuat modul gambar. Cek koneksi lalu coba lagi.");
       return;
     } finally {
       btn.disabled = false;
@@ -1353,7 +1353,7 @@ async function downloadPNG() {
     triggerDownload(dataUrl, `patungan-${new Date().toISOString().slice(0, 10)}.png`);
   } catch (e) {
     console.error(e);
-    alert("Gagal membuat PNG. Coba lagi.");
+    await showAlert("Gagal membuat PNG. Coba lagi.");
   } finally {
     document.body.removeChild(node);
   }
@@ -1366,14 +1366,14 @@ function downloadCSV() {
   downloadBlob(blob, `patungan-${new Date().toISOString().slice(0, 10)}.csv`);
 }
 
-function tryLoadFromHash(): boolean {
+async function tryLoadFromHash(): Promise<boolean> {
   const encoded = extractShareHash(location.hash);
   if (!encoded) return false;
   try {
     const s: any = decodeShareState(encoded);
     history.replaceState(null, "", location.pathname); // clean up the hash
     if (!s || !s.bill) return false;
-    if (confirm("Buka patungan dari link yang dibagikan?")) {
+    if (await showConfirm("Buka patungan dari link yang dibagikan?")) {
       restoreSession(s);
     }
     return true;
@@ -1405,8 +1405,8 @@ function pushHistory() {
 }
 
 // ============ RESET ============
-$("btn-reset").addEventListener("click", () => {
-  if (!confirm("Mulai ulang dari awal?")) return;
+$("btn-reset").addEventListener("click", async () => {
+  if (!(await showConfirm("Mulai ulang dari awal?"))) return;
   bill = { items: [], tax: 0, service: 0, discount: 0 };
   people = [];
   selectedFile = null;
@@ -1429,6 +1429,6 @@ registerServiceWorker();
 
 // ============ INIT ============
 // Priority: share link → if none, offer to restore the saved session.
-if (!tryLoadFromHash()) showRestoreBanner();
+if (!(await tryLoadFromHash())) showRestoreBanner();
 
 void lastGrandTotal;
