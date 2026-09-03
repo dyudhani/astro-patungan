@@ -40,6 +40,7 @@ let paid: Record<string, boolean> = {}; // "paid" checklist per name
 let payLink = ""; // payment link (QRIS/e-wallet)
 let reconcile = false; // make the collected total match the bill (diff goes to 1 person)
 let summaryPaidBound = false; // has the "paid" checkbox listener been attached?
+let appendMode = false; // true after "+ Tambah dari struk lain" — merge instead of replace
 
 // roundTotal & roundCfg → ./format ; calculations → ./calc ; OCR → ./ocr
 
@@ -68,6 +69,44 @@ function renderScanWarnings(warnings: string[]) {
   el.innerHTML = `<div class="info">⚠️ <b>Cek manual sebelum lanjut:</b><br/>${warnings
     .map((w) => "• " + escapeHtml(w))
     .join("<br/>")}</div>`;
+}
+
+// Shows/hides the "adding to an existing bill" banner in step-upload, with a
+// way to cancel back to normal (replace) mode.
+function syncAppendModeBanner() {
+  const el = $("append-mode-banner");
+  if (!appendMode) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = `<div class="info">➕ Menambahkan ke struk yang sudah ada (${bill.items.length} pesanan) — struk baru akan <b>ditambahkan</b>, bukan menimpa. <button type="button" id="btn-cancel-append" style="margin-left:6px;text-decoration:underline;background:none;border:none;color:inherit;cursor:pointer;font-weight:600;">Batal</button></div>`;
+  $("btn-cancel-append").addEventListener("click", () => {
+    appendMode = false;
+    syncAppendModeBanner();
+  });
+}
+
+// Merges freshly scanned/entered items into the existing bill (append mode)
+// or replaces it entirely — the single point every entry path routes through.
+function mergeOrReplaceBill(
+  newItems: { name: string; qty: number; price: number; total: number }[],
+  tax: number,
+  service: number,
+  discount: number,
+) {
+  const itemsWithIds = newItems.map((it) => ({ id: nextItemId++, ...it }));
+  if (appendMode) {
+    bill = {
+      items: [...bill.items, ...itemsWithIds],
+      tax: bill.tax + tax,
+      service: bill.service + service,
+      discount: bill.discount + discount,
+    };
+    appendMode = false;
+  } else {
+    bill = { items: itemsWithIds, tax, service, discount };
+  }
+  syncAppendModeBanner();
 }
 
 // 90° rotate button for tilted/sideways receipt photos (injected into #preview).
@@ -130,19 +169,8 @@ $("btn-parse-text").addEventListener("click", async () => {
     return;
   }
   const parsed = parseReceipt(txt);
-  bill = {
-    items: parsed.items.map((it) => ({
-      id: nextItemId++,
-      name: it.name,
-      qty: it.qty,
-      price: it.price,
-      total: it.total,
-    })),
-    tax: parsed.tax,
-    service: parsed.service,
-    discount: parsed.discount,
-  };
-  if (bill.items.length === 0)
+  mergeOrReplaceBill(parsed.items, parsed.tax, parsed.service, parsed.discount);
+  if (parsed.items.length === 0)
     await showAlert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
   renderScanWarnings(parsed.warnings);
   pastePanel.classList.add("hidden");
@@ -185,18 +213,22 @@ $("to-go").addEventListener("click", async () => {
     await showAlert("Isi nama teman dulu, pisahkan dengan koma (mis: Andi, Budi, Citra).");
     return;
   }
-  bill = {
-    items: [{ id: nextItemId++, name: "Total Bill", qty: 1, price: total, total }],
-    tax: 0,
-    service: 0,
-    discount: 0,
-  };
-  const iid = bill.items[0].id;
-  people = names.map((name) => ({
-    id: nextPersonId++,
-    name,
-    items: { [iid]: 1 },
-  }));
+  const wasAppend = appendMode;
+  mergeOrReplaceBill([{ name: "Total Bill", qty: 1, price: total, total }], 0, 0, 0);
+  const iid = bill.items[bill.items.length - 1].id;
+
+  if (wasAppend) {
+    // Add any new names, then charge everyone (old + new) for this item too.
+    const existingNames = new Set(people.map((p) => p.name));
+    names
+      .filter((n) => !existingNames.has(n))
+      .forEach((name) => people.push({ id: nextPersonId++, name, items: {} }));
+    people.forEach((p) => {
+      p.items[iid] = 1;
+    });
+  } else {
+    people = names.map((name) => ({ id: nextPersonId++, name, items: { [iid]: 1 } }));
+  }
   totalOnlyPanel.classList.add("hidden");
   renderBillStep();
   renderPeopleStep();
@@ -351,20 +383,9 @@ btnScan.addEventListener("click", async () => {
       onProgress: setProgress,
     });
 
-    bill = {
-      items: parsed.items.map((it) => ({
-        id: nextItemId++,
-        name: it.name,
-        qty: it.qty,
-        price: it.price,
-        total: it.total,
-      })),
-      tax: parsed.tax,
-      service: parsed.service,
-      discount: parsed.discount,
-    };
+    mergeOrReplaceBill(parsed.items, parsed.tax, parsed.service, parsed.discount);
 
-    if (bill.items.length === 0) {
+    if (parsed.items.length === 0) {
       uploadError.innerHTML = `<div class="info">⚠️ OCR tidak menemukan item yang jelas. Tambah item manual di langkah berikutnya, atau coba foto yang lebih terang & lurus.</div>`;
     }
     renderScanWarnings(parsed.warnings);
@@ -384,7 +405,7 @@ btnScan.addEventListener("click", async () => {
 });
 
 btnSkip.addEventListener("click", () => {
-  bill = { items: [], tax: 0, service: 0, discount: 0 };
+  mergeOrReplaceBill([], 0, 0, 0);
   renderBillStep();
   $("step-bill").classList.remove("hidden");
   $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -557,6 +578,17 @@ $("btn-add-item").addEventListener("click", () => {
   const inputs = $("items-list").querySelectorAll('input[data-field="name"]');
   const last = inputs[inputs.length - 1] as HTMLInputElement | undefined;
   last?.focus();
+});
+
+// Sends the user back to step-upload to scan/paste a second receipt, whose
+// items get merged into the current bill instead of replacing it.
+$("btn-add-receipt").addEventListener("click", () => {
+  appendMode = true;
+  setFile(null);
+  fileInput.value = "";
+  uploadError.innerHTML = "";
+  syncAppendModeBanner();
+  $("step-upload").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 // Tax / Service / Discount — each has a value input + mode selector (Rp/%).

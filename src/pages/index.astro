@@ -55,6 +55,8 @@ import Layout from "../layouts/Layout.astro";
         >
       </div>
 
+      <div id="append-mode-banner"></div>
+
       <div id="upload-error"></div>
 
       <!-- Progress -->
@@ -96,12 +98,20 @@ import Layout from "../layouts/Layout.astro";
 
       <div id="items-list"></div>
 
-      <button
-        class="btn btn-secondary"
-        id="btn-add-item"
-        style="margin-top: 12px; font-size: 14px; padding: 8px 14px;"
-        >+ Tambah pesanan</button
-      >
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px;">
+        <button
+          class="btn btn-secondary"
+          id="btn-add-item"
+          style="font-size: 14px; padding: 8px 14px;"
+          >+ Tambah pesanan</button
+        >
+        <button
+          class="btn btn-secondary"
+          id="btn-add-receipt"
+          style="font-size: 14px; padding: 8px 14px;"
+          >📷 Tambah dari struk lain</button
+        >
+      </div>
 
       <div class="totals">
         <div class="totals-row">
