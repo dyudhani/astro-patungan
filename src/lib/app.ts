@@ -21,6 +21,7 @@ import {
 import { setupThemeToggle } from "./theme";
 import { registerServiceWorker } from "./pwa";
 import { showAlert, showConfirm } from "./modal";
+import { showToast } from "./toast";
 
 // html-to-image via CDN (for PNG export).
 declare const htmlToImage: {
@@ -534,9 +535,27 @@ $("items-list").addEventListener("click", (e) => {
   const removeBtn = t.closest("[data-remove]") as HTMLElement | null;
   if (removeBtn) {
     const id = Number(removeBtn.dataset.remove);
-    bill.items = bill.items.filter((i) => i.id !== id);
+    const idx = bill.items.findIndex((i) => i.id === id);
+    if (idx === -1) return;
+    const removedItem = bill.items[idx];
+    const removedShares = people
+      .filter((p) => p.items[id] !== undefined)
+      .map((p) => ({ p, qty: p.items[id] }));
+
+    bill.items.splice(idx, 1);
     people.forEach((p) => delete p.items[id]);
     renderBillStep();
+
+    showToast(`"${removedItem.name || "(tanpa nama)"}" dihapus.`, {
+      actionLabel: "Undo",
+      onAction: () => {
+        bill.items.splice(idx, 0, removedItem);
+        removedShares.forEach(({ p, qty }) => {
+          p.items[id] = qty;
+        });
+        renderBillStep();
+      },
+    });
     return;
   }
 
@@ -727,8 +746,20 @@ $("people-list").addEventListener("click", (e) => {
   const removeBtn = t.closest("[data-remove-person]") as HTMLElement | null;
   if (removeBtn) {
     const pid = Number(removeBtn.dataset.removePerson);
-    people = people.filter((p) => p.id !== pid);
+    const idx = people.findIndex((p) => p.id === pid);
+    if (idx === -1) return;
+    const removedPerson = people[idx];
+
+    people.splice(idx, 1);
     renderPeopleStep();
+
+    showToast(`"${removedPerson.name || "Tanpa nama"}" dihapus.`, {
+      actionLabel: "Undo",
+      onAction: () => {
+        people.splice(idx, 0, removedPerson);
+        renderPeopleStep();
+      },
+    });
     return;
   }
 
