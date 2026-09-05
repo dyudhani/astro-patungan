@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildShareText,
+  buildPersonShareText,
   buildCsv,
   encodeShareState,
   decodeShareState,
@@ -71,6 +72,36 @@ describe("buildShareText", () => {
 
     const withoutBank = buildShareText(results, {}, "", null, "");
     expect(withoutBank).not.toContain("Transfer ke:");
+  });
+});
+
+describe("buildPersonShareText", () => {
+  it("only mentions that one person's own items and total", () => {
+    const text = buildPersonShareText(results[0], "", null, "");
+    expect(text).toContain("Dicky");
+    expect(text).toContain("Mie Goreng");
+    expect(text).toContain("Rp 17.000");
+    expect(text).not.toContain("Ayu");
+    expect(text).not.toContain("Es Teh");
+  });
+
+  it("tells a non-payer to transfer to the payer, but not the payer themself", () => {
+    const forAyu = buildPersonShareText(results[1], "Dicky", null, "");
+    expect(forAyu).toContain("Transfer ke *Dicky*");
+
+    const forPayer = buildPersonShareText(results[0], "Dicky", null, "");
+    expect(forPayer).not.toContain("Transfer ke *Dicky*");
+  });
+
+  it("includes bank details and the payment link only when provided", () => {
+    const text = buildPersonShareText(
+      results[0],
+      "",
+      { name: "BCA", acc: "1234567890", holder: "Dicky" },
+      "https://pay.example/xyz",
+    );
+    expect(text).toContain("Bank BCA");
+    expect(text).toContain("https://pay.example/xyz");
   });
 });
 

@@ -44,6 +44,40 @@ export function buildShareText(
   return lines.join("\n");
 }
 
+// A private message for just one person's own breakdown, so a shared group
+// chat message doesn't expose what everyone else owes.
+export function buildPersonShareText(
+  result: PersonResult,
+  payerName: string,
+  bank: BankInfo | null,
+  payLink: string,
+): string {
+  const lines: string[] = [`*Patungan* 🧾 — untuk ${result.name}`, ""];
+  result.items.forEach((i) =>
+    lines.push(
+      `• ${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}: ${fmtIDR(i.share)}`,
+    ),
+  );
+  lines.push("", `Subtotal: ${fmtIDR(result.subtotal)}`);
+  if (result.taxShare > 0) lines.push(`Pajak: ${fmtIDR(result.taxShare)}`);
+  if (result.serviceShare > 0) lines.push(`Service: ${fmtIDR(result.serviceShare)}`);
+  if (result.discountShare > 0) lines.push(`Diskon: -${fmtIDR(result.discountShare)}`);
+  lines.push("", `💰 *Total kamu: ${fmtIDR(result.totalRounded)}*`);
+
+  if (bank && (bank.name || bank.acc || bank.holder)) {
+    lines.push("", "💳 Transfer ke:");
+    if (bank.name) lines.push("Bank " + bank.name);
+    if (bank.acc) lines.push(bank.acc);
+    if (bank.holder) lines.push("a.n. " + bank.holder);
+  }
+  if (payLink) lines.push("", "🔗 Bayar: " + payLink);
+  if (payerName && payerName !== result.name) {
+    lines.push("", `🤝 Transfer ke *${payerName}* (yang nalangin).`);
+  }
+  lines.push("", "via patungan. — https://astro-patungan.vercel.app/");
+  return lines.join("\n");
+}
+
 export function buildCsv(
   results: PersonResult[],
   paid: Record<string, boolean>,

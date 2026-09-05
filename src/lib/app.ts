@@ -13,6 +13,7 @@ import { loadHtmlToImage } from "./cdn";
 import { buildReceiptNode, type BankInfo } from "./receipt";
 import {
   buildShareText,
+  buildPersonShareText,
   buildCsv,
   buildShareLink as encodeShareLink,
   decodeShareState,
@@ -996,7 +997,7 @@ function setupResultExtras() {
     );
   }
 
-  // "paid" checklist (delegated listener, attached once).
+  // "paid" checklist + per-person WhatsApp send (delegated, attached once).
   if (!summaryPaidBound) {
     summaryPaidBound = true;
     $("summary-list").addEventListener("change", (e) => {
@@ -1005,6 +1006,17 @@ function setupResultExtras() {
         paid[t.dataset.paid] = t.checked;
         renderResult();
       }
+    });
+    $("summary-list").addEventListener("click", (e) => {
+      const btn = (e.target as HTMLElement).closest(
+        "[data-send-wa]",
+      ) as HTMLElement | null;
+      if (!btn) return;
+      const name = btn.dataset.sendWa!;
+      const r = lastResults.find((res) => res.name === name);
+      if (!r) return;
+      const text = buildPersonShareText(r, payerName, currentBank(), capturePayLink());
+      window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank");
     });
   }
 }
@@ -1286,9 +1298,12 @@ function renderResult() {
         <div style="font-size:16px; font-weight:bold; color:var(--ink);">
           👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:var(--accent-soft);color:var(--accent);padding:2px 8px;border-radius:6px;margin-left:6px;">LUNAS</span>` : ""}
         </div>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-muted);cursor:pointer;">
-          <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> Lunas
-        </label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button type="button" data-send-wa="${escapeHtml(r.name)}" title="Kirim rincian ke ${escapeHtml(r.name)}" aria-label="Kirim rincian ke ${escapeHtml(r.name)}" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px;line-height:1;">📲</button>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-muted);cursor:pointer;">
+            <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> Lunas
+          </label>
+        </div>
       </div>
 
       <div style="font-size:13px; color:var(--ink); display:flex; flex-direction:column; gap:6px;">
