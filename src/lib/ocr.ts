@@ -2,6 +2,7 @@
 
 import { parseReceipt, type ParsedReceipt } from "./parseReceipt";
 import { loadTesseract } from "./cdn";
+import { t } from "./i18n";
 
 declare const Tesseract: any;
 
@@ -322,21 +323,21 @@ export async function recognizeReceipt(
   // "recognizing text" progress is scaled per pass.
   let ocrBase = 60;
   let ocrSpan = 40;
-  let ocrPassText = "Membaca struk...";
+  let ocrPassText = t("ocrReadingGeneric");
 
-  report(2, "Mengunduh OCR engine...");
+  report(2, t("ocrDownloadingEngine"));
   await loadTesseract();
 
-  report(5, "Memuat Tesseract OCR...");
+  report(5, t("ocrLoadingTesseract"));
   const worker = await Tesseract.createWorker("ind+eng", 1, {
     logger: (m: any) => {
       if (m.status === "loading tesseract core")
-        report(10, "Memuat OCR engine...");
+        report(10, t("ocrLoadingEngine"));
       else if (m.status === "initializing tesseract")
-        report(18, "Inisialisasi...");
+        report(18, t("ocrInitializing"));
       else if (m.status === "loading language traineddata")
-        report(20 + (m.progress || 0) * 20, "Mengunduh model bahasa Indonesia...");
-      else if (m.status === "initializing api") report(42, "Menyiapkan...");
+        report(20 + (m.progress || 0) * 20, t("ocrDownloadingLangModel"));
+      else if (m.status === "initializing api") report(42, t("ocrPreparing"));
       else if (m.status === "recognizing text")
         report(
           ocrBase + (m.progress || 0) * ocrSpan,
@@ -352,14 +353,14 @@ export async function recognizeReceipt(
       // LSTM font-size heuristics don't wrongly assume this is a real 300dpi scan.
       user_defined_dpi: "300",
     });
-    report(48, "Meluruskan & menajamkan kontras struk...");
+    report(48, t("ocrStraightening"));
     const processed = await preprocessImage(file, rotation);
 
     // Pass 1 — PSM 6: a single uniform text block.
     await worker.setParameters({ tessedit_pageseg_mode: "6" });
     ocrBase = 60;
     ocrSpan = 20;
-    ocrPassText = "Membaca struk (1/2)...";
+    ocrPassText = t("ocrReadingPass1");
     report(60, ocrPassText);
     const p1 = parseReceipt((await worker.recognize(processed)).data.text);
 
@@ -367,7 +368,7 @@ export async function recognizeReceipt(
     await worker.setParameters({ tessedit_pageseg_mode: "4" });
     ocrBase = 80;
     ocrSpan = 20;
-    ocrPassText = "Membaca ulang (2/2)...";
+    ocrPassText = t("ocrReadingPass2");
     report(80, ocrPassText);
     const p2 = parseReceipt((await worker.recognize(processed)).data.text);
 

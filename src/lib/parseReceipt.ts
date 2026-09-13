@@ -3,6 +3,8 @@
  * Heuristic-based — not AI, but effective for common receipt formats.
  */
 
+import { t } from "./i18n";
+
 export interface ParsedItem {
   name: string;
   qty: number;
@@ -344,7 +346,10 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     const expectedTotal = calculatedSubtotal + finalTax + finalService - discount;
     if (Math.abs(expectedTotal - totalFound) / totalFound > 0.08) {
       warnings.push(
-        `Total dari rincian item (Rp ${fmtNum(expectedTotal)}) beda jauh dari TOTAL di struk (Rp ${fmtNum(totalFound)}) — kemungkinan ada angka yang salah kebaca, cek manual.`,
+        t("warnTotalMismatch", {
+          expected: `Rp ${fmtNum(expectedTotal)}`,
+          found: `Rp ${fmtNum(totalFound)}`,
+        }),
       );
     }
   }
@@ -354,14 +359,15 @@ export function parseReceipt(rawText: string): ParsedReceipt {
     const netCalculated = calculatedSubtotal - discount;
     if (Math.abs(netCalculated - subtotalFound) / subtotalFound > 0.08) {
       warnings.push(
-        `Jumlah semua item (Rp ${fmtNum(netCalculated)}) tidak cocok dengan Subtotal di struk (Rp ${fmtNum(subtotalFound)}) — kemungkinan ada item yang salah kebaca.`,
+        t("warnSubtotalMismatch", {
+          calc: `Rp ${fmtNum(netCalculated)}`,
+          found: `Rp ${fmtNum(subtotalFound)}`,
+        }),
       );
     }
   }
   if (totalFound === 0 && subtotalFound === 0 && items.length > 0) {
-    warnings.push(
-      `Baris "Subtotal/Total" tidak terbaca dari struk — isi manual di langkah berikutnya.`,
-    );
+    warnings.push(t("warnNoTotalFound"));
   }
 
   return {

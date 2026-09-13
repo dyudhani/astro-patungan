@@ -110,7 +110,7 @@ describe("buildCsv", () => {
     const csv = buildCsv(results, {});
     const rows = csv.split("\r\n");
     expect(rows[0]).toBe(
-      "Nama,Pesanan,Subtotal,Pajak,Service,Diskon,Total,Status",
+      "Nama,Pesanan,Subtotal,Pajak (Tax),Service Charge,Diskon,Total Bill,Status",
     );
     expect(rows).toHaveLength(2 /* people */ + 1 /* blank */ + 1 /* total */ + 1 /* header */);
     expect(rows.at(-1)).toContain("Total Terkumpul");

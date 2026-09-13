@@ -1,6 +1,8 @@
 // Custom alert/confirm dialog replacing native browser ones (unstyled, jarring).
 // Reuses the .card/.btn classes from Layout.astro so it themes for free.
 
+import { t } from "./i18n";
+
 function buildOverlay(): HTMLDivElement {
   const overlay = document.createElement("div");
   overlay.style.cssText =
@@ -31,7 +33,7 @@ function buildButtonRow(): HTMLDivElement {
 }
 
 /** Show a message with a single "OK" button. Resolves once dismissed. */
-export function showAlert(message: string, okLabel = "OK"): Promise<void> {
+export function showAlert(message: string, okLabel = t("ok")): Promise<void> {
   return new Promise((resolve) => {
     const overlay = buildOverlay();
     const dialog = buildDialog(message);
@@ -68,7 +70,7 @@ export function showConfirm(
   message: string,
   opts: { confirmLabel?: string; cancelLabel?: string } = {},
 ): Promise<boolean> {
-  const { confirmLabel = "Ya", cancelLabel = "Batal" } = opts;
+  const { confirmLabel = t("yes"), cancelLabel = t("btnCancel") } = opts;
   return new Promise((resolve) => {
     const overlay = buildOverlay();
     const dialog = buildDialog(message);

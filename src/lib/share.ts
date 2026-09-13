@@ -4,6 +4,7 @@
 import type { PersonResult } from "./types";
 import { fmtIDR, csvCell } from "./format";
 import type { BankInfo } from "./receipt";
+import { t } from "./i18n";
 
 export function buildShareText(
   results: PersonResult[],
@@ -12,18 +13,18 @@ export function buildShareText(
   bank: BankInfo | null,
   payLink: string,
 ): string {
-  const lines: string[] = ["*Patungan* 🧾"];
+  const lines: string[] = [t("shareHeader")];
   if (bank && (bank.name || bank.acc || bank.holder)) {
-    lines.push("", "💳 Transfer ke:");
-    if (bank.name) lines.push("Bank " + bank.name);
+    lines.push("", t("shareTransferTo"));
+    if (bank.name) lines.push(t("shareBank", { name: bank.name }));
     if (bank.acc) lines.push(bank.acc);
-    if (bank.holder) lines.push("a.n. " + bank.holder);
+    if (bank.holder) lines.push(t("shareHolder", { holder: bank.holder }));
   }
-  if (payLink) lines.push("", "🔗 Bayar: " + payLink);
+  if (payLink) lines.push("", t("sharePay", { link: payLink }));
   lines.push("");
   results.forEach((r) => {
     lines.push(
-      `👤 *${r.name}* — ${fmtIDR(r.totalRounded)}${paid[r.name] ? " ✅ LUNAS" : ""}`,
+      `👤 *${r.name}* — ${fmtIDR(r.totalRounded)}${paid[r.name] ? ` ✅ ${t("paidBadge")}` : ""}`,
     );
     r.items.forEach((i) =>
       lines.push(
@@ -32,15 +33,15 @@ export function buildShareText(
     );
   });
   const grand = results.reduce((s, r) => s + r.totalRounded, 0);
-  lines.push("", `💰 Total: ${fmtIDR(grand)}`);
+  lines.push("", t("shareTotal", { amount: fmtIDR(grand) }));
   if (payerName) {
     const others = results.filter((r) => r.name !== payerName && r.totalRounded > 0);
     if (others.length) {
-      lines.push("", `🤝 Transfer ke *${payerName}* (yang nalangin):`);
+      lines.push("", t("shareTransferToPayer", { payer: payerName }));
       others.forEach((r) => lines.push(`   ${r.name}: ${fmtIDR(r.totalRounded)}`));
     }
   }
-  lines.push("", "via patungan. — https://astro-patungan.vercel.app/");
+  lines.push("", t("shareFooter"));
   return lines.join("\n");
 }
 
@@ -52,29 +53,31 @@ export function buildPersonShareText(
   bank: BankInfo | null,
   payLink: string,
 ): string {
-  const lines: string[] = [`*Patungan* 🧾 — untuk ${result.name}`, ""];
+  const lines: string[] = [t("personShareHeader", { name: result.name }), ""];
   result.items.forEach((i) =>
     lines.push(
       `• ${i.name}${i.qty < i.totalShares ? ` (${i.qty}/${i.totalShares})` : ""}: ${fmtIDR(i.share)}`,
     ),
   );
-  lines.push("", `Subtotal: ${fmtIDR(result.subtotal)}`);
-  if (result.taxShare > 0) lines.push(`Pajak: ${fmtIDR(result.taxShare)}`);
-  if (result.serviceShare > 0) lines.push(`Service: ${fmtIDR(result.serviceShare)}`);
-  if (result.discountShare > 0) lines.push(`Diskon: -${fmtIDR(result.discountShare)}`);
-  lines.push("", `💰 *Total kamu: ${fmtIDR(result.totalRounded)}*`);
+  lines.push("", t("personShareSubtotal", { amount: fmtIDR(result.subtotal) }));
+  if (result.taxShare > 0) lines.push(t("personSharePajak", { amount: fmtIDR(result.taxShare) }));
+  if (result.serviceShare > 0)
+    lines.push(t("personShareService", { amount: fmtIDR(result.serviceShare) }));
+  if (result.discountShare > 0)
+    lines.push(t("personShareDiskon", { amount: fmtIDR(result.discountShare) }));
+  lines.push("", t("personShareTotal", { amount: fmtIDR(result.totalRounded) }));
 
   if (bank && (bank.name || bank.acc || bank.holder)) {
-    lines.push("", "💳 Transfer ke:");
-    if (bank.name) lines.push("Bank " + bank.name);
+    lines.push("", t("shareTransferTo"));
+    if (bank.name) lines.push(t("shareBank", { name: bank.name }));
     if (bank.acc) lines.push(bank.acc);
-    if (bank.holder) lines.push("a.n. " + bank.holder);
+    if (bank.holder) lines.push(t("shareHolder", { holder: bank.holder }));
   }
-  if (payLink) lines.push("", "🔗 Bayar: " + payLink);
+  if (payLink) lines.push("", t("sharePay", { link: payLink }));
   if (payerName && payerName !== result.name) {
-    lines.push("", `🤝 Transfer ke *${payerName}* (yang nalangin).`);
+    lines.push("", t("personShareTransferToPayer", { payer: payerName }));
   }
-  lines.push("", "via patungan. — https://astro-patungan.vercel.app/");
+  lines.push("", t("shareFooter"));
   return lines.join("\n");
 }
 
@@ -83,7 +86,16 @@ export function buildCsv(
   paid: Record<string, boolean>,
 ): string {
   const rows: (string | number)[][] = [
-    ["Nama", "Pesanan", "Subtotal", "Pajak", "Service", "Diskon", "Total", "Status"],
+    [
+      t("csvName"),
+      t("csvItems"),
+      t("subtotalLabel"),
+      t("taxLabel"),
+      t("serviceLabel"),
+      t("discountLabel"),
+      t("totalBillLabel"),
+      t("csvStatus"),
+    ],
   ];
   results.forEach((r) => {
     const items = r.items
@@ -100,12 +112,12 @@ export function buildCsv(
       Math.round(r.serviceShare),
       Math.round(r.discountShare),
       r.totalRounded,
-      paid[r.name] ? "LUNAS" : "Belum",
+      paid[r.name] ? t("csvStatusPaid") : t("csvStatusUnpaid"),
     ]);
   });
   const grand = results.reduce((s, r) => s + r.totalRounded, 0);
   rows.push([]);
-  rows.push(["Total Terkumpul", "", "", "", "", "", grand, ""]);
+  rows.push([t("csvTotalCollected"), "", "", "", "", "", grand, ""]);
 
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
