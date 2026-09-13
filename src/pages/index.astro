@@ -6,12 +6,12 @@ import Layout from "../layouts/Layout.astro";
   <main class="shell">
     <header class="brand">
       <span class="brand-mark">patungan.</span>
-      <span class="brand-tag">split bill · 100% offline</span>
+      <span class="brand-tag" id="brand-tag">split bill · 100% offline</span>
     </header>
 
     <section class="hero">
-      <h1>Bagi bill, <em style="color: var(--accent);">tanpa drama.</em></h1>
-      <p>
+      <h1 id="hero-title">Bagi bill, <em style="color: var(--accent);">tanpa drama.</em></h1>
+      <p id="hero-desc">
         Upload foto struk, pilih siapa pesan apa, kelar. OCR jalan di browser
         kamu — tidak ada data yang dikirim ke server.
       </p>
@@ -20,7 +20,7 @@ import Layout from "../layouts/Layout.astro";
     <section class="card" id="step-upload">
       <div class="step">
         <span class="step-num">1</span>
-        <span class="step-title">Foto struk</span>
+        <span class="step-title" id="step1-title">Foto struk</span>
       </div>
 
       <label class="dropzone" id="dropzone">
@@ -36,8 +36,8 @@ import Layout from "../layouts/Layout.astro";
             d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 7.5m0 0L7.5 12M12 7.5v9"
           ></path>
         </svg>
-        <div class="dropzone-text">Tap untuk pilih foto struk</div>
-        <div class="dropzone-hint">atau drag &amp; drop · JPG, PNG, WEBP</div>
+        <div class="dropzone-text" id="dropzone-text">Tap untuk pilih foto struk</div>
+        <div class="dropzone-hint" id="dropzone-hint">atau drag &amp; drop · JPG, PNG, WEBP</div>
         <input
           type="file"
           id="file-input"
@@ -88,9 +88,9 @@ import Layout from "../layouts/Layout.astro";
     <section class="card hidden" id="step-bill">
       <div class="step">
         <span class="step-num">2</span>
-        <span class="step-title">Cek isi struk</span>
+        <span class="step-title" id="step2-title">Cek isi struk</span>
       </div>
-      <p class="card-subtitle">
+      <p class="card-subtitle" id="step2-subtitle">
         Penting: Sesuaikan Harga Total & Satuan jika ada yang salah baca.
       </p>
 
@@ -115,12 +115,12 @@ import Layout from "../layouts/Layout.astro";
 
       <div class="totals">
         <div class="totals-row">
-          <span>Subtotal</span>
+          <span id="subtotal-label">Subtotal</span>
           <span class="mono" id="t-subtotal">Rp 0</span>
         </div>
 
         <div class="totals-row">
-          <span>Pajak (Tax)</span>
+          <span id="tax-label">Pajak (Tax)</span>
           <div style="display:flex; gap:6px; align-items:center;">
             <select
               id="t-tax-mode"
@@ -152,7 +152,7 @@ import Layout from "../layouts/Layout.astro";
           ></span>
         </div>
         <div class="totals-row">
-          <span>Service Charge</span>
+          <span id="service-label">Service Charge</span>
           <div style="display:flex; gap:6px; align-items:center;">
             <select
               id="t-service-mode"
@@ -172,6 +172,11 @@ import Layout from "../layouts/Layout.astro";
             />
           </div>
         </div>
+        <div style="display:flex; justify-content:flex-end; gap:6px; padding: 2px 0 6px;">
+          <button type="button" class="btn btn-secondary" data-service-preset="10" style="font-size:12px; padding:4px 10px;">10%</button>
+          <button type="button" class="btn btn-secondary" data-service-preset="15" style="font-size:12px; padding:4px 10px;">15%</button>
+          <button type="button" class="btn btn-secondary" data-service-preset="20" style="font-size:12px; padding:4px 10px;">20%</button>
+        </div>
         <div
           class="totals-row hidden"
           id="t-service-nominal-row"
@@ -184,7 +189,7 @@ import Layout from "../layouts/Layout.astro";
           ></span>
         </div>
         <div class="totals-row">
-          <span>Diskon</span>
+          <span id="discount-label">Diskon</span>
           <div style="display:flex; gap:6px; align-items:center;">
             <select
               id="t-discount-mode"
@@ -216,7 +221,7 @@ import Layout from "../layouts/Layout.astro";
           ></span>
         </div>
         <div class="totals-row grand">
-          <span>Total Bill</span>
+          <span id="total-bill-label">Total Bill</span>
           <span class="mono" id="t-total">Rp 0</span>
         </div>
       </div>
@@ -231,9 +236,9 @@ import Layout from "../layouts/Layout.astro";
     <section class="card hidden" id="step-people">
       <div class="step">
         <span class="step-num">3</span>
-        <span class="step-title">Bagi per Pesanan</span>
+        <span class="step-title" id="step3-title">Bagi per Pesanan</span>
       </div>
-      <p class="card-subtitle">
+      <p class="card-subtitle" id="step3-subtitle">
         Tambah nama teman yang ikut patungan, lalu tandai siapa saja yang makan
         di tiap pesanan.
       </p>
@@ -254,6 +259,46 @@ import Layout from "../layouts/Layout.astro";
         >
       </div>
 
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
+        <button
+          type="button"
+          class="btn btn-secondary"
+          id="btn-save-group"
+          style="font-size:13px; padding:8px 14px;"
+          >💾 Simpan grup ini</button
+        >
+        <button
+          type="button"
+          class="btn btn-secondary"
+          id="btn-load-group"
+          style="font-size:13px; padding:8px 14px;"
+          >👥 Pakai grup tersimpan</button
+        >
+      </div>
+
+      <div
+        class="hidden"
+        id="save-group-panel"
+        style="display:flex; gap:8px; margin-bottom:16px;"
+      >
+        <input
+          type="text"
+          class="input"
+          id="group-name-input"
+          placeholder="Nama grup (mis: Kantor Squad)"
+          aria-label="Nama grup"
+          style="flex:1;"
+        />
+        <button
+          type="button"
+          class="btn btn-primary"
+          id="btn-confirm-save-group"
+          style="flex-shrink:0;">Simpan</button
+        >
+      </div>
+
+      <div class="hidden" id="load-group-panel" style="margin-bottom:16px;"></div>
+
       <div id="people-list"></div>
 
       <button
@@ -264,7 +309,7 @@ import Layout from "../layouts/Layout.astro";
     </section>
 
     <section class="summary hidden" id="step-result">
-      <h2>Hasil <em style="color: var(--accent);">Patungan</em></h2>
+      <h2 id="result-heading">Hasil <em style="color: var(--accent);">Patungan</em></h2>
       <div class="summary-sub" id="summary-sub">—</div>
 
       <div id="summary-list"></div>
@@ -275,7 +320,7 @@ import Layout from "../layouts/Layout.astro";
           id="btn-download"
           style="background: var(--accent); color: var(--bg); font-weight: bold; font-size: 16px; padding: 14px;"
         >
-          <span>📥 Download / Cetak PDF</span>
+          <span id="btn-download-label">📥 Download / Cetak PDF</span>
         </button>
       </div>
 
@@ -290,8 +335,8 @@ import Layout from "../layouts/Layout.astro";
     </section>
 
     <footer>
-      <p>
-        <span>&copy; dyudhani 2026 |</span> Gratis · tanpa daftar · tanpa server ·
+      <p id="footer-text">
+        © dyudhani 2026 | Gratis · tanpa daftar · tanpa server ·
         OCR jalan di browser kamu
       </p>
     </footer>
