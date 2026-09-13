@@ -21,8 +21,11 @@ import {
 } from "./share";
 import { setupThemeToggle } from "./theme";
 import { registerServiceWorker } from "./pwa";
+import { setupInstallPrompt } from "./install-prompt";
 import { showAlert, showConfirm } from "./modal";
 import { showToast } from "./toast";
+import { t, getLang, onLangChange, applyStaticTranslations } from "./i18n";
+import { setupLangToggle } from "./lang-toggle";
 
 // html-to-image via CDN (for PNG export).
 declare const htmlToImage: {
@@ -68,7 +71,7 @@ function renderScanWarnings(warnings: string[]) {
     el.innerHTML = "";
     return;
   }
-  el.innerHTML = `<div class="info">⚠️ <b>Cek manual sebelum lanjut:</b><br/>${warnings
+  el.innerHTML = `<div class="info">⚠️ <b>${t("scanWarningHeading")}</b><br/>${warnings
     .map((w) => "• " + escapeHtml(w))
     .join("<br/>")}</div>`;
 }
@@ -81,7 +84,7 @@ function syncAppendModeBanner() {
     el.innerHTML = "";
     return;
   }
-  el.innerHTML = `<div class="info">➕ Menambahkan ke struk yang sudah ada (${bill.items.length} pesanan) — struk baru akan <b>ditambahkan</b>, bukan menimpa. <button type="button" id="btn-cancel-append" style="margin-left:6px;text-decoration:underline;background:none;border:none;color:inherit;cursor:pointer;font-weight:600;">Batal</button></div>`;
+  el.innerHTML = `<div class="info">${t("appendBannerText", { count: bill.items.length })} <button type="button" id="btn-cancel-append" style="margin-left:6px;text-decoration:underline;background:none;border:none;color:inherit;cursor:pointer;font-weight:600;">${t("btnCancel")}</button></div>`;
   $("btn-cancel-append").addEventListener("click", () => {
     appendMode = false;
     syncAppendModeBanner();
@@ -90,12 +93,43 @@ function syncAppendModeBanner() {
 
 // Merges freshly scanned/entered items into the existing bill (append mode)
 // or replaces it entirely — the single point every entry path routes through.
-function mergeOrReplaceBill(
+// True if most of `newItems` already match an existing item by name+total —
+// a strong hint the same struk got scanned/pasted twice by mistake.
+function looksLikeDuplicateScan(
+  newItems: { name: string; total: number }[],
+  existing: BillItem[],
+): boolean {
+  if (newItems.length === 0 || existing.length === 0) return false;
+  const existingKeys = new Set(
+    existing.map((i) => `${i.name.trim().toLowerCase()}|${i.total}`),
+  );
+  const matches = newItems.filter((i) =>
+    existingKeys.has(`${i.name.trim().toLowerCase()}|${i.total}`),
+  ).length;
+  return matches / newItems.length >= 0.6;
+}
+
+// Returns false (and leaves `bill` untouched) if the user cancels after
+// being warned this looks like a duplicate scan — callers must check this
+// before assuming their new items/ids exist.
+async function mergeOrReplaceBill(
   newItems: { name: string; qty: number; price: number; total: number }[],
   tax: number,
   service: number,
   discount: number,
-) {
+): Promise<boolean> {
+  if (appendMode && looksLikeDuplicateScan(newItems, bill.items)) {
+    const proceed = await showConfirm(t("duplicateScanConfirm"), {
+      confirmLabel: t("duplicateScanConfirmYes"),
+      cancelLabel: t("btnCancel"),
+    });
+    if (!proceed) {
+      appendMode = false;
+      syncAppendModeBanner();
+      return false;
+    }
+  }
+
   const itemsWithIds = newItems.map((it) => ({ id: nextItemId++, ...it }));
   if (appendMode) {
     bill = {
@@ -109,14 +143,15 @@ function mergeOrReplaceBill(
     bill = { items: itemsWithIds, tax, service, discount };
   }
   syncAppendModeBanner();
+  return true;
 }
 
 // 90° rotate button for tilted/sideways receipt photos (injected into #preview).
 const rotateBtn = document.createElement("button");
 rotateBtn.type = "button";
 rotateBtn.id = "preview-rotate";
-rotateBtn.textContent = "↻ Putar";
-rotateBtn.title = "Putar 90°";
+rotateBtn.textContent = t("rotateBtnText");
+rotateBtn.title = t("rotateBtnTitle");
 rotateBtn.style.cssText =
   "position:absolute;bottom:8px;right:8px;background:rgba(15,23,42,0.85);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer;z-index:2;";
 preview.appendChild(rotateBtn);
@@ -145,8 +180,8 @@ const extraRow = document.createElement("div");
 extraRow.style.cssText =
   "display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;";
 extraRow.innerHTML = `
-  <button type="button" id="btn-camera" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">📷 Foto pakai kamera</button>
-  <button type="button" id="btn-paste" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">📋 Tempel teks struk</button>`;
+  <button type="button" id="btn-camera" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">${t("btnCamera")}</button>
+  <button type="button" id="btn-paste" class="btn btn-secondary" style="flex:1; min-width:140px; font-size:13px;">${t("btnPaste")}</button>`;
 btnSkip.parentElement?.appendChild(extraRow);
 
 const pastePanel = document.createElement("div");
@@ -154,8 +189,8 @@ pastePanel.id = "paste-panel";
 pastePanel.className = "hidden";
 pastePanel.style.cssText = "margin-top:10px;";
 pastePanel.innerHTML = `
-  <textarea id="paste-text" class="input" rows="6" placeholder="Tempel teks struk di sini — tiap baris: nama + harga (mis. 'Es Teh 8.000')..." aria-label="Teks struk" style="width:100%; font-family:var(--mono); font-size:13px; line-height:1.5;"></textarea>
-  <button type="button" id="btn-parse-text" class="btn btn-primary btn-block" style="margin-top:8px;">Proses teks → daftar pesanan</button>`;
+  <textarea id="paste-text" class="input" rows="6" placeholder="${t("pasteTextPlaceholder")}" aria-label="${t("pasteTextAria")}" style="width:100%; font-family:var(--mono); font-size:13px; line-height:1.5;"></textarea>
+  <button type="button" id="btn-parse-text" class="btn btn-primary btn-block" style="margin-top:8px;">${t("btnParseText")}</button>`;
 btnSkip.parentElement?.appendChild(pastePanel);
 
 $("btn-camera").addEventListener("click", () => camInput.click());
@@ -167,13 +202,13 @@ $("btn-paste").addEventListener("click", () => {
 $("btn-parse-text").addEventListener("click", async () => {
   const txt = $<HTMLTextAreaElement>("paste-text").value.trim();
   if (!txt) {
-    await showAlert("Tempel teks struk dulu.");
+    await showAlert(t("pasteEmptyAlert"));
     return;
   }
   const parsed = parseReceipt(txt);
-  mergeOrReplaceBill(parsed.items, parsed.tax, parsed.service, parsed.discount);
-  if (parsed.items.length === 0)
-    await showAlert("Tidak ada item terbaca dari teks. Coba rapikan formatnya, atau tambah manual di langkah berikutnya.");
+  const merged = await mergeOrReplaceBill(parsed.items, parsed.tax, parsed.service, parsed.discount);
+  if (!merged) return;
+  if (parsed.items.length === 0) await showAlert(t("noItemsFromTextAlert"));
   renderScanWarnings(parsed.warnings);
   pastePanel.classList.add("hidden");
   renderBillStep();
@@ -184,7 +219,7 @@ $("btn-parse-text").addEventListener("click", async () => {
 // ============ SPLIT TOTAL EVENLY ONLY (no item breakdown) ============
 const totalOnlyRow = document.createElement("div");
 totalOnlyRow.style.cssText = "margin-top:8px;";
-totalOnlyRow.innerHTML = `<button type="button" id="btn-total-only" class="btn btn-secondary btn-block" style="font-size:13px;">💸 Bagi rata total saja (tanpa rincian)</button>`;
+totalOnlyRow.innerHTML = `<button type="button" id="btn-total-only" class="btn btn-secondary btn-block" style="font-size:13px;">${t("btnTotalOnly")}</button>`;
 btnSkip.parentElement?.appendChild(totalOnlyRow);
 
 const totalOnlyPanel = document.createElement("div");
@@ -193,9 +228,9 @@ totalOnlyPanel.className = "hidden";
 totalOnlyPanel.style.cssText =
   "margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;";
 totalOnlyPanel.innerHTML = `
-  <input type="number" id="to-total" class="input mono" placeholder="Total bill (Rp)" aria-label="Total bill (Rp)" style="width:100%;" />
-  <textarea id="to-names" class="input" rows="2" placeholder="Nama teman, pisahkan dengan koma (mis: Andi, Budi, Citra)" aria-label="Nama teman" style="width:100%; margin-top:8px; font-family:inherit;"></textarea>
-  <button type="button" id="to-go" class="btn btn-primary btn-block" style="margin-top:8px;">Bagi rata</button>`;
+  <input type="number" id="to-total" class="input mono" placeholder="${t("toTotalPlaceholder")}" aria-label="${t("toTotalPlaceholder")}" style="width:100%;" />
+  <textarea id="to-names" class="input" rows="2" placeholder="${t("toNamesPlaceholder")}" aria-label="${t("toNamesAria")}" style="width:100%; margin-top:8px; font-family:inherit;"></textarea>
+  <button type="button" id="to-go" class="btn btn-primary btn-block" style="margin-top:8px;">${t("btnGo")}</button>`;
 btnSkip.parentElement?.appendChild(totalOnlyPanel);
 
 $("btn-total-only").addEventListener("click", () =>
@@ -208,15 +243,21 @@ $("to-go").addEventListener("click", async () => {
     .map((s) => s.trim())
     .filter(Boolean);
   if (total <= 0) {
-    await showAlert("Isi total bill dulu.");
+    await showAlert(t("totalBillEmptyAlert"));
     return;
   }
   if (names.length === 0) {
-    await showAlert("Isi nama teman dulu, pisahkan dengan koma (mis: Andi, Budi, Citra).");
+    await showAlert(t("namesEmptyAlert"));
     return;
   }
   const wasAppend = appendMode;
-  mergeOrReplaceBill([{ name: "Total Bill", qty: 1, price: total, total }], 0, 0, 0);
+  const merged = await mergeOrReplaceBill(
+    [{ name: t("totalBillLabel"), qty: 1, price: total, total }],
+    0,
+    0,
+    0,
+  );
+  if (!merged) return;
   const iid = bill.items[bill.items.length - 1].id;
 
   if (wasAppend) {
@@ -242,7 +283,7 @@ $("to-go").addEventListener("click", async () => {
 // ============ BILL-SPLIT HISTORY (UI) ============
 const histRow = document.createElement("div");
 histRow.style.cssText = "margin-top:8px;";
-histRow.innerHTML = `<button type="button" id="btn-history" class="btn btn-secondary btn-block" style="font-size:13px;">🕘 Riwayat patungan</button>`;
+histRow.innerHTML = `<button type="button" id="btn-history" class="btn btn-secondary btn-block" style="font-size:13px;">${t("btnHistory")}</button>`;
 btnSkip.parentElement?.appendChild(histRow);
 
 const histPanel = document.createElement("div");
@@ -254,14 +295,14 @@ btnSkip.parentElement?.appendChild(histPanel);
 function renderHistory() {
   const list = loadHistory();
   if (list.length === 0) {
-    histPanel.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);padding:10px;">Belum ada riwayat. Selesaikan satu patungan dulu.</div>`;
+    histPanel.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);padding:10px;">${t("historyEmpty")}</div>`;
     return;
   }
   histPanel.innerHTML = list
     .map((h, idx) => {
       let when = "";
       try {
-        when = new Date(h.ts).toLocaleString("id-ID", {
+        when = new Date(h.ts).toLocaleString(getLang() === "en" ? "en-US" : "id-ID", {
           day: "2-digit",
           month: "short",
           hour: "2-digit",
@@ -271,10 +312,10 @@ function renderHistory() {
         /* noop */
       }
       return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;">
-        <div style="font-size:13px;color:var(--ink);"><b>${fmtIDR(h.grand || 0)}</b> · ${h.peopleCount || 0} orang<br/><span style="color:var(--ink-muted);font-size:12px;">${when}</span></div>
+        <div style="font-size:13px;color:var(--ink);"><b>${fmtIDR(h.grand || 0)}</b> · ${t("historyPeopleCount", { count: h.peopleCount || 0 })}<br/><span style="color:var(--ink-muted);font-size:12px;">${when}</span></div>
         <div style="display:flex;gap:6px;">
-          <button type="button" data-hist-open="${idx}" class="btn" style="background:var(--accent);color:#fff;font-size:12px;padding:6px 12px;">Buka</button>
-          <button type="button" data-hist-del="${idx}" class="btn" style="background:var(--danger-soft);color:var(--danger);font-size:12px;padding:6px 10px;">Hapus</button>
+          <button type="button" data-hist-open="${idx}" class="btn" style="background:var(--accent);color:#fff;font-size:12px;padding:6px 12px;">${t("historyOpenBtn")}</button>
+          <button type="button" data-hist-del="${idx}" class="btn" style="background:var(--danger-soft);color:var(--danger);font-size:12px;padding:6px 10px;">${t("historyDelBtn")}</button>
         </div>
       </div>`;
     })
@@ -326,12 +367,12 @@ function setFile(file: File | null) {
     };
     reader.readAsDataURL(file);
     btnScan.disabled = false;
-    scanLabel.textContent = "🔍 Baca struk (offline)";
+    scanLabel.textContent = t("scanLabelRescan");
   } else {
     preview.classList.add("hidden");
     previewImg.src = "";
     btnScan.disabled = true;
-    scanLabel.textContent = "Pilih foto dulu";
+    scanLabel.textContent = t("scanLabelChooseFirst");
   }
 }
 
@@ -374,10 +415,10 @@ function setProgress(pct: number, text: string) {
 btnScan.addEventListener("click", async () => {
   if (!selectedFile) return;
   btnScan.disabled = true;
-  scanLabel.innerHTML = '<span class="spinner"></span> Memproses...';
+  scanLabel.innerHTML = `<span class="spinner"></span> ${t("scanLabelProcessing")}`;
   uploadError.innerHTML = "";
   progressWrap.classList.remove("hidden");
-  setProgress(5, "Memuat Tesseract OCR...");
+  setProgress(5, t("ocrLoadingTesseract"));
 
   try {
     const parsed = await recognizeReceipt(selectedFile, {
@@ -385,10 +426,16 @@ btnScan.addEventListener("click", async () => {
       onProgress: setProgress,
     });
 
-    mergeOrReplaceBill(parsed.items, parsed.tax, parsed.service, parsed.discount);
+    const merged = await mergeOrReplaceBill(
+      parsed.items,
+      parsed.tax,
+      parsed.service,
+      parsed.discount,
+    );
+    if (!merged) return;
 
     if (parsed.items.length === 0) {
-      uploadError.innerHTML = `<div class="info">⚠️ OCR tidak menemukan item yang jelas. Tambah item manual di langkah berikutnya, atau coba foto yang lebih terang & lurus.</div>`;
+      uploadError.innerHTML = `<div class="info">${t("ocrNoItemsWarning")}</div>`;
     }
     renderScanWarnings(parsed.warnings);
 
@@ -397,17 +444,17 @@ btnScan.addEventListener("click", async () => {
     $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err: any) {
     console.error(err);
-    uploadError.innerHTML = `<div class="error">❌ ${err.message || "Gagal memproses gambar"}. Coba foto lain atau input manual.</div>`;
+    uploadError.innerHTML = `<div class="error">❌ ${err.message || t("ocrErrorGeneric")}${t("ocrErrorSuffix")}</div>`;
   } finally {
     progressWrap.classList.add("hidden");
     setProgress(0, "");
     btnScan.disabled = false;
-    scanLabel.textContent = "🔄 Scan ulang";
+    scanLabel.textContent = t("scanLabelScanAgain");
   }
 });
 
-btnSkip.addEventListener("click", () => {
-  mergeOrReplaceBill([], 0, 0, 0);
+btnSkip.addEventListener("click", async () => {
+  await mergeOrReplaceBill([], 0, 0, 0);
   renderBillStep();
   $("step-bill").classList.remove("hidden");
   $("step-bill").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -428,23 +475,23 @@ function renderBillStep() {
 
     row.innerHTML = `
       <div style="display:flex; gap:6px; width: 100%; align-items:center;">
-        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="Nama Pesanan" aria-label="Nama pesanan" style="flex:1; color:var(--ink); font-weight:600;" />
-        <button data-move="up" data-id="${item.id}" type="button" title="Naik" aria-label="Pindah pesanan ke atas" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
-        <button data-move="down" data-id="${item.id}" type="button" title="Turun" aria-label="Pindah pesanan ke bawah" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
-        <button data-dup="${item.id}" type="button" title="Duplikat" aria-label="Duplikat pesanan" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-soft); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
-        <button class="person-remove" data-remove="${item.id}" type="button" aria-label="Hapus pesanan" style="background:var(--danger-soft); color:var(--danger); border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
+        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="${t("itemNamePlaceholder")}" aria-label="${t("itemNameAria")}" style="flex:1; color:var(--ink); font-weight:600;" />
+        <button data-move="up" data-id="${item.id}" type="button" title="${t("moveUpTitle")}" aria-label="${t("moveUpAria")}" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
+        <button data-move="down" data-id="${item.id}" type="button" title="${t("moveDownTitle")}" aria-label="${t("moveDownAria")}" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
+        <button data-dup="${item.id}" type="button" title="${t("dupTitle")}" aria-label="${t("dupAria")}" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-soft); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
+        <button class="person-remove" data-remove="${item.id}" type="button" aria-label="${t("removeItemAria")}" style="background:var(--danger-soft); color:var(--danger); border-radius:8px; width:40px; height:38px; display:flex; align-items:center; justify-content:center; font-weight:bold;">✕</button>
       </div>
       <div style="display:flex; align-items:center; gap:6px; width: 100%;">
-        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="Jumlah (Qty)" aria-label="Jumlah (Qty)" style="width:60px; text-align:center; padding:8px 4px; color:var(--ink); border:1px solid var(--line);" />
+        <input type="number" class="input mono" value="${item.qty}" min="1" data-id="${item.id}" data-field="qty" title="${t("qtyTitle")}" aria-label="${t("qtyTitle")}" style="width:60px; text-align:center; padding:8px 4px; color:var(--ink); border:1px solid var(--line);" />
         <span style="color:var(--ink-muted); font-size:14px; font-weight:bold;">×</span>
         <div style="position:relative; flex:1; max-width: 120px;">
           <span style="position:absolute; left:8px; top:10px; font-size:12px; color:var(--ink-muted);">@</span>
-          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="Harga Satuan" placeholder="Satuan" aria-label="Harga satuan" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:var(--ink); border:1px solid var(--line);" />
+          <input type="number" class="input mono" value="${item.price}" min="0" data-id="${item.id}" data-field="price" title="${t("unitPriceTitle")}" placeholder="${t("unitPricePlaceholder")}" aria-label="${t("unitPriceAria")}" style="width:100%; padding:8px 8px 8px 24px; text-align:right; color:var(--ink); border:1px solid var(--line);" />
         </div>
         <span style="color:var(--ink-muted); font-size:14px; font-weight:bold;">=</span>
         <div style="position:relative; flex:1;">
           <span style="position:absolute; left:8px; top:10px; font-size:12px; color:var(--accent); font-weight:bold;">Rp</span>
-          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="Harga Total" placeholder="Total" aria-label="Harga total" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:var(--accent); font-weight:bold; background:var(--accent-soft); border:1px solid var(--accent-soft);" />
+          <input type="number" class="input mono" value="${item.total}" min="0" data-id="${item.id}" data-field="total" title="${t("totalPriceTitle")}" placeholder="${t("totalPricePlaceholder")}" aria-label="${t("totalPriceAria")}" style="width:100%; padding:8px 8px 8px 28px; text-align:right; color:var(--accent); font-weight:bold; background:var(--accent-soft); border:1px solid var(--accent-soft);" />
         </div>
       </div>
     `;
@@ -531,9 +578,9 @@ $("items-list").addEventListener("input", (e) => {
 });
 
 $("items-list").addEventListener("click", (e) => {
-  const t = e.target as HTMLElement;
+  const target = e.target as HTMLElement;
 
-  const removeBtn = t.closest("[data-remove]") as HTMLElement | null;
+  const removeBtn = target.closest("[data-remove]") as HTMLElement | null;
   if (removeBtn) {
     const id = Number(removeBtn.dataset.remove);
     const idx = bill.items.findIndex((i) => i.id === id);
@@ -547,8 +594,8 @@ $("items-list").addEventListener("click", (e) => {
     people.forEach((p) => delete p.items[id]);
     renderBillStep();
 
-    showToast(`"${removedItem.name || "(tanpa nama)"}" dihapus.`, {
-      actionLabel: "Undo",
+    showToast(t("deletedToast", { name: removedItem.name || t("itemNoNameFallback") }), {
+      actionLabel: t("undoLabel"),
       onAction: () => {
         bill.items.splice(idx, 0, removedItem);
         removedShares.forEach(({ p, qty }) => {
@@ -561,7 +608,7 @@ $("items-list").addEventListener("click", (e) => {
   }
 
   // Duplicate order (inserted right below it).
-  const dupBtn = t.closest("[data-dup]") as HTMLElement | null;
+  const dupBtn = target.closest("[data-dup]") as HTMLElement | null;
   if (dupBtn) {
     const id = Number(dupBtn.dataset.dup);
     const idx = bill.items.findIndex((i) => i.id === id);
@@ -573,7 +620,7 @@ $("items-list").addEventListener("click", (e) => {
   }
 
   // Reorder up/down.
-  const moveBtn = t.closest("[data-move]") as HTMLElement | null;
+  const moveBtn = target.closest("[data-move]") as HTMLElement | null;
   if (moveBtn) {
     const id = Number(moveBtn.dataset.id);
     const idx = bill.items.findIndex((i) => i.id === id);
@@ -619,15 +666,24 @@ $("btn-add-receipt").addEventListener("click", () => {
   $(id).addEventListener("change", updateBillTotals),
 );
 
+// Quick presets for Service Charge (10/15/20%) — sets percent mode + value.
+document.querySelectorAll("[data-service-preset]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $<HTMLSelectElement>("t-service-mode").value = "percent";
+    $<HTMLInputElement>("t-service").value = (btn as HTMLElement).dataset.servicePreset!;
+    updateBillTotals();
+  });
+});
+
 $("btn-to-people").addEventListener("click", async () => {
   if (bill.items.length === 0) {
-    await showAlert("Tambah minimal 1 item dulu");
+    await showAlert(t("addMinItemAlert"));
     return;
   }
   if (people.length === 0) {
     people = [
-      { id: nextPersonId++, name: "Orang 1", items: {} },
-      { id: nextPersonId++, name: "Orang 2", items: {} },
+      { id: nextPersonId++, name: `${t("defaultPersonName")} 1`, items: {} },
+      { id: nextPersonId++, name: `${t("defaultPersonName")} 2`, items: {} },
     ];
   }
   renderPeopleStep();
@@ -651,15 +707,15 @@ function renderPeopleStep() {
 
   const tagsHtml = people.map(p => `
     <div style="display:inline-flex; align-items:center; background:var(--line-soft); border:1px solid var(--line); color:var(--ink); padding:6px 12px; border-radius:20px; font-size:14px; font-weight:600; margin:4px 6px 4px 0;">
-      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="Klik untuk ganti nama" aria-label="Nama teman" style="background:transparent; border:none; outline:none; color:var(--ink); font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
-      <button type="button" data-remove-person="${p.id}" aria-label="Hapus teman ${escapeHtml(p.name)}" style="margin-left:6px; color:var(--danger); font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
+      👤 <input type="text" value="${escapeHtml(p.name)}" data-edit-person="${p.id}" title="${t("editNameTitle")}" aria-label="${t("friendNameAria")}" style="background:transparent; border:none; outline:none; color:var(--ink); font-weight:600; font-size:14px; padding:0 2px; width:${Math.max(4, p.name.length)}ch; min-width:36px;" />
+      <button type="button" data-remove-person="${p.id}" aria-label="${t("removeFriendAria", { name: escapeHtml(p.name) })}" style="margin-left:6px; color:var(--danger); font-size:16px; font-weight:bold; cursor:pointer; background:none; border:none;">✕</button>
     </div>
   `).join("");
 
   peopleManager.innerHTML = `
-    <div style="font-size:14px; font-weight:bold; color:var(--ink); margin-bottom:10px;">Daftar Teman Patungan:</div>
+    <div style="font-size:14px; font-weight:bold; color:var(--ink); margin-bottom:10px;">${t("peopleListLabel")}</div>
     <div style="display:flex; flex-wrap:wrap;">
-       ${people.length > 0 ? tagsHtml : '<span style="color:var(--ink-muted); font-size:13px; font-style:italic;">Belum ada yang gabung. Tambah di atas 👆</span>'}
+       ${people.length > 0 ? tagsHtml : `<span style="color:var(--ink-muted); font-size:13px; font-style:italic;">${t("noOneJoinedYet")}</span>`}
     </div>
   `;
   list.appendChild(peopleManager);
@@ -673,10 +729,10 @@ function renderPeopleStep() {
     (it) => getItemSharersCount(it.id) === 0,
   );
   controls.innerHTML = `
-    <button type="button" id="btn-split-global" style="width:100%; font-size:13px; padding:10px; border-radius:8px; border:1px dashed var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer; margin-bottom:${unassigned.length ? "10px" : "0"};">⚖️ Bagikan SEMUA pesanan rata ke semua teman</button>
+    <button type="button" id="btn-split-global" style="width:100%; font-size:13px; padding:10px; border-radius:8px; border:1px dashed var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer; margin-bottom:${unassigned.length ? "10px" : "0"};">${t("splitAllEvenlyBtn")}</button>
     ${
       unassigned.length
-        ? `<div style="background:var(--warning-soft); border:1px solid var(--warning); color:var(--warning); padding:10px 12px; border-radius:8px; font-size:13px;">⚠️ <b>${unassigned.length} pesanan belum dibagi</b>: ${unassigned.map((i) => escapeHtml(i.name || "(tanpa nama)")).join(", ")}</div>`
+        ? `<div style="background:var(--warning-soft); border:1px solid var(--warning); color:var(--warning); padding:10px 12px; border-radius:8px; font-size:13px;">⚠️ ${t("unassignedWarning", { count: unassigned.length, names: unassigned.map((i) => escapeHtml(i.name || t("itemNoNameFallback"))).join(", ") })}</div>`
         : ""
     }`;
   list.appendChild(controls);
@@ -702,14 +758,14 @@ function renderPeopleStep() {
                   👤 ${escapeHtml(person.name)}
                 </div>
                 <div class="chip-meta" style="color:var(--ink); opacity:0.7;">
-                  ${active ? `<span style="color:var(--accent); font-weight:bold; opacity:1;">Tanggungan: ${fmtIDR(perHead)}</span>` : "Belum ditagih"}
+                  ${active ? `<span style="color:var(--accent); font-weight:bold; opacity:1;">${t("perHeadOwes", { amount: fmtIDR(perHead) })}</span>` : t("notChargedYet")}
                 </div>
               </div>
             </div>
             <div class="chip-actions" style="display:flex; align-items:center; gap:8px;">
-              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" aria-label="Kurangi porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--ink); background:var(--bg-card); color:var(--ink); font-weight:bold; cursor:pointer;">-</button>
+              <button type="button" class="btn-qty minus" data-action="minus" data-person="${person.id}" data-item="${item.id}" aria-label="${t("decreasePortionAria", { name: escapeHtml(person.name) })}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--ink); background:var(--bg-card); color:var(--ink); font-weight:bold; cursor:pointer;">-</button>
               <span style="font-weight:bold; min-width:12px; text-align:center; color:var(--ink);">${qty}</span>
-              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" aria-label="Tambah porsi ${escapeHtml(person.name)}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--accent); background:var(--accent); color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
+              <button type="button" class="btn-qty plus" data-action="plus" data-person="${person.id}" data-item="${item.id}" aria-label="${t("increasePortionAria", { name: escapeHtml(person.name) })}" style="padding:2px 8px; border-radius:4px; border:1px solid var(--accent); background:var(--accent); color:#FFFFFF; font-weight:bold; cursor:pointer;">+</button>
             </div>
           </div>
         `;
@@ -719,19 +775,19 @@ function renderPeopleStep() {
     card.innerHTML = `
       <div class="item-head" style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed var(--line); display:flex; justify-content:space-between; align-items:flex-start;">
         <div>
-          <div style="font-weight:bold; font-size:16px; color:var(--ink);">🍽️ ${escapeHtml(item.name || "(Tanpa Nama)")}</div>
-          <div style="font-size:13px; color:var(--ink-muted); margin-top:4px;">${item.qty} Qty × ${fmtIDR(item.price)}</div>
+          <div style="font-weight:bold; font-size:16px; color:var(--ink);">🍽️ ${escapeHtml(item.name || t("noNameItemFallback"))}</div>
+          <div style="font-size:13px; color:var(--ink-muted); margin-top:4px;">${t("qtyTimesPrice", { qty: item.qty, price: fmtIDR(item.price) })}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-weight:900; font-size:16px; color:var(--accent);">${fmtIDR(item.total)}</div>
-          ${sharersCount > 0 
-            ? `<div style="font-size:10px; font-weight:600; background:var(--accent-soft); color:var(--accent); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Ditagih ke ${sharersCount} teman</div>` 
-            : `<div style="font-size:10px; font-weight:600; background:var(--danger-soft); color:var(--danger); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">Belum ada yang bayar</div>`}
+          ${sharersCount > 0
+            ? `<div style="font-size:10px; font-weight:600; background:var(--accent-soft); color:var(--accent); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">${t("chargedToNFriends", { count: sharersCount })}</div>`
+            : `<div style="font-size:10px; font-weight:600; background:var(--danger-soft); color:var(--danger); padding:3px 6px; border-radius:4px; margin-top:6px; display:inline-block;">${t("noOnePayingYet")}</div>`}
         </div>
       </div>
       <div style="display:flex; gap:8px; margin-bottom:10px;">
-        <button type="button" class="btn-split-all" data-item="${item.id}" style="flex:1; font-size:12px; padding:7px; border-radius:6px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer;">⚖️ Bagi rata ke semua</button>
-        ${sharersCount > 0 ? `<button type="button" class="btn-clear-item" data-item="${item.id}" style="font-size:12px; padding:7px 12px; border-radius:6px; border:1px solid var(--line); background:var(--bg-card); color:var(--ink-muted); cursor:pointer;">Kosongkan</button>` : ""}
+        <button type="button" class="btn-split-all" data-item="${item.id}" style="flex:1; font-size:12px; padding:7px; border-radius:6px; border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent); font-weight:600; cursor:pointer;">${t("splitOneEvenlyBtn")}</button>
+        ${sharersCount > 0 ? `<button type="button" class="btn-clear-item" data-item="${item.id}" style="font-size:12px; padding:7px 12px; border-radius:6px; border:1px solid var(--line); background:var(--bg-card); color:var(--ink-muted); cursor:pointer;">${t("clearItemBtn")}</button>` : ""}
       </div>
       <div class="chip-grid" style="display:flex; flex-direction:column; gap:8px;">${chips}</div>
     `;
@@ -742,9 +798,9 @@ function renderPeopleStep() {
 }
 
 $("people-list").addEventListener("click", (e) => {
-  const t = e.target as HTMLElement;
+  const target = e.target as HTMLElement;
 
-  const removeBtn = t.closest("[data-remove-person]") as HTMLElement | null;
+  const removeBtn = target.closest("[data-remove-person]") as HTMLElement | null;
   if (removeBtn) {
     const pid = Number(removeBtn.dataset.removePerson);
     const idx = people.findIndex((p) => p.id === pid);
@@ -754,8 +810,8 @@ $("people-list").addEventListener("click", (e) => {
     people.splice(idx, 1);
     renderPeopleStep();
 
-    showToast(`"${removedPerson.name || "Tanpa nama"}" dihapus.`, {
-      actionLabel: "Undo",
+    showToast(t("deletedToast", { name: removedPerson.name || t("noNamePersonFallback") }), {
+      actionLabel: t("undoLabel"),
       onAction: () => {
         people.splice(idx, 0, removedPerson);
         renderPeopleStep();
@@ -765,7 +821,7 @@ $("people-list").addEventListener("click", (e) => {
   }
 
   // Split ALL orders evenly among all friends (qty 1 per person per item).
-  if (t.closest("#btn-split-global")) {
+  if (target.closest("#btn-split-global")) {
     bill.items.forEach((it) =>
       people.forEach((p) => {
         p.items[it.id] = 1;
@@ -776,7 +832,7 @@ $("people-list").addEventListener("click", (e) => {
   }
 
   // Split one order evenly among all friends.
-  const splitAll = t.closest(".btn-split-all") as HTMLElement | null;
+  const splitAll = target.closest(".btn-split-all") as HTMLElement | null;
   if (splitAll) {
     const iid = Number(splitAll.dataset.item);
     people.forEach((p) => {
@@ -787,7 +843,7 @@ $("people-list").addEventListener("click", (e) => {
   }
 
   // Clear one order from all friends.
-  const clearItem = t.closest(".btn-clear-item") as HTMLElement | null;
+  const clearItem = target.closest(".btn-clear-item") as HTMLElement | null;
   if (clearItem) {
     const iid = Number(clearItem.dataset.item);
     people.forEach((p) => {
@@ -797,16 +853,16 @@ $("people-list").addEventListener("click", (e) => {
     return;
   }
 
-  if (t.classList.contains("btn-qty")) {
-    const pid = Number(t.dataset.person);
-    const iid = Number(t.dataset.item);
+  if (target.classList.contains("btn-qty")) {
+    const pid = Number(target.dataset.person);
+    const iid = Number(target.dataset.item);
     const p = people.find((x) => x.id === pid);
     if (!p) return;
-    
+
     let currentQty = p.items[iid] || 0;
-    if (t.dataset.action === "plus") {
+    if (target.dataset.action === "plus") {
       p.items[iid] = currentQty + 1;
-    } else if (t.dataset.action === "minus") {
+    } else if (target.dataset.action === "minus") {
       if (currentQty > 1) {
         p.items[iid] = currentQty - 1;
       } else {
@@ -817,7 +873,7 @@ $("people-list").addEventListener("click", (e) => {
     return;
   }
 
-  const chipMain = t.closest(".chip-main") as HTMLElement | null;
+  const chipMain = target.closest(".chip-main") as HTMLElement | null;
   if (chipMain) {
     const pid = Number(chipMain.dataset.person);
     const iid = Number(chipMain.dataset.item);
@@ -849,7 +905,7 @@ $("people-list").addEventListener("input", (e) => {
 
 $("btn-add-person").addEventListener("click", () => {
   const inp = $<HTMLInputElement>("new-person");
-  const name = inp.value.trim() || `Teman ${people.length + 1}`;
+  const name = inp.value.trim() || `${t("defaultFriendName")} ${people.length + 1}`;
   people.push({ id: nextPersonId++, name, items: {} });
   inp.value = "";
   renderPeopleStep();
@@ -859,6 +915,119 @@ $<HTMLInputElement>("new-person").addEventListener("keypress", (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
     $("btn-add-person").click();
+  }
+});
+
+// ============ SAVED FRIEND GROUPS (localStorage) ============
+interface FriendGroup {
+  id: number;
+  name: string;
+  members: string[];
+}
+const GROUPS_KEY = "patungan_groups_v1";
+
+function loadGroups(): FriendGroup[] {
+  try {
+    return JSON.parse(localStorage.getItem(GROUPS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+function saveGroups(groups: FriendGroup[]) {
+  try {
+    localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
+  } catch {
+    /* noop */
+  }
+}
+
+$("btn-save-group").addEventListener("click", () => {
+  $("load-group-panel").classList.add("hidden");
+  $("save-group-panel").classList.toggle("hidden");
+  if (!$("save-group-panel").classList.contains("hidden"))
+    $<HTMLInputElement>("group-name-input").focus();
+});
+
+$("btn-confirm-save-group").addEventListener("click", async () => {
+  const nameInput = $<HTMLInputElement>("group-name-input");
+  const groupName = nameInput.value.trim();
+  if (!groupName) {
+    await showAlert(t("groupNameEmptyAlert"));
+    return;
+  }
+  if (people.length === 0) {
+    await showAlert(t("groupNeedPersonAlert"));
+    return;
+  }
+  const members = people.map((p) => p.name).filter(Boolean);
+  const groups = loadGroups();
+  const existingIdx = groups.findIndex((g) => g.name === groupName);
+  if (existingIdx >= 0) {
+    const overwrite = await showConfirm(t("groupOverwriteConfirm", { name: groupName }));
+    if (!overwrite) return;
+    groups[existingIdx] = { ...groups[existingIdx], members };
+  } else {
+    groups.push({ id: Date.now(), name: groupName, members });
+  }
+  saveGroups(groups);
+  nameInput.value = "";
+  $("save-group-panel").classList.add("hidden");
+  showToast(t("groupSavedToast", { name: groupName }));
+});
+
+function renderGroupList() {
+  const panel = $("load-group-panel");
+  const groups = loadGroups();
+  if (groups.length === 0) {
+    panel.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);padding:10px;">${t("groupEmptyList")}</div>`;
+    return;
+  }
+  panel.innerHTML = groups
+    .map(
+      (g) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;">
+        <div style="font-size:13px;color:var(--ink);"><b>${escapeHtml(g.name)}</b><br/><span style="color:var(--ink-muted);font-size:12px;">${t("groupMembersLabel", { count: g.members.length, names: g.members.map(escapeHtml).join(", ") })}</span></div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button type="button" data-group-use="${g.id}" class="btn" style="background:var(--accent);color:#fff;font-size:12px;padding:6px 12px;">${t("groupUseBtn")}</button>
+          <button type="button" data-group-del="${g.id}" class="btn" style="background:var(--danger-soft);color:var(--danger);font-size:12px;padding:6px 10px;">${t("historyDelBtn")}</button>
+        </div>
+      </div>`,
+    )
+    .join("");
+}
+
+$("btn-load-group").addEventListener("click", () => {
+  $("save-group-panel").classList.add("hidden");
+  $("load-group-panel").classList.toggle("hidden");
+  if (!$("load-group-panel").classList.contains("hidden")) renderGroupList();
+});
+
+$("load-group-panel").addEventListener("click", (e) => {
+  const target = e.target as HTMLElement;
+
+  const useBtn = target.closest("[data-group-use]") as HTMLElement | null;
+  if (useBtn) {
+    const g = loadGroups().find((gr) => gr.id === Number(useBtn.dataset.groupUse));
+    if (g) {
+      const existingNames = new Set(people.map((p) => p.name));
+      g.members
+        .filter((name) => !existingNames.has(name))
+        .forEach((name) => people.push({ id: nextPersonId++, name, items: {} }));
+      renderPeopleStep();
+      showToast(t("groupAddedToast", { name: g.name }));
+    }
+    return;
+  }
+
+  const delBtn = target.closest("[data-group-del]") as HTMLElement | null;
+  if (delBtn) {
+    const groups = loadGroups();
+    const idx = groups.findIndex((gr) => gr.id === Number(delBtn.dataset.groupDel));
+    if (idx >= 0) {
+      groups.splice(idx, 1);
+      saveGroups(groups);
+      renderGroupList();
+    }
+    return;
   }
 });
 
@@ -877,13 +1046,13 @@ function setupBankInputs() {
     bankHtml.style.borderRadius = "8px";
     bankHtml.style.border = "1px solid var(--line)";
     bankHtml.innerHTML = `
-      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:var(--ink); font-weight:600;">💳 Detail Pembayaran (Muncul Paling Atas PDF)</h4>
+      <h4 style="margin-top:0; margin-bottom:12px; font-size:14px; color:var(--ink); font-weight:600;">${t("bankDetailsHeading")}</h4>
       <div style="display:flex; gap:10px; flex-wrap:wrap;">
-        <input type="text" id="bank-name-input" class="input" placeholder="Nama Bank (BCA, Mandiri...)" aria-label="Nama bank" style="flex:1; min-width:120px; color:var(--ink);" />
-        <input type="text" id="bank-acc-input" class="input" placeholder="No Rekening" aria-label="Nomor rekening" style="flex:1; min-width:150px; color:var(--ink);" />
-        <input type="text" id="bank-holder-input" class="input" placeholder="Atas Nama" aria-label="Nama pemilik rekening" style="flex:1; min-width:150px; color:var(--ink);" />
+        <input type="text" id="bank-name-input" class="input" placeholder="${t("bankNamePlaceholder")}" aria-label="${t("bankNameAria")}" style="flex:1; min-width:120px; color:var(--ink);" />
+        <input type="text" id="bank-acc-input" class="input" placeholder="${t("bankAccPlaceholder")}" aria-label="${t("bankAccAria")}" style="flex:1; min-width:150px; color:var(--ink);" />
+        <input type="text" id="bank-holder-input" class="input" placeholder="${t("bankHolderPlaceholder")}" aria-label="${t("bankHolderAria")}" style="flex:1; min-width:150px; color:var(--ink);" />
       </div>
-      <input type="text" id="bank-link-input" class="input" placeholder="Link pembayaran (QRIS / GoPay / OVO / DANA / link e-wallet)" aria-label="Link pembayaran" style="width:100%; margin-top:10px; color:var(--ink);" />
+      <input type="text" id="bank-link-input" class="input" placeholder="${t("bankLinkPlaceholder")}" aria-label="${t("bankLinkAria")}" style="width:100%; margin-top:10px; color:var(--ink);" />
     `;
     $("step-result").insertBefore(bankHtml, $("summary-list"));
     ["bank-name-input", "bank-acc-input", "bank-holder-input", "bank-link-input"].forEach(
@@ -918,23 +1087,23 @@ function setupResultExtras() {
     s.style.cssText =
       "background:var(--bg-card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-top:16px;font-size:13px;color:var(--ink);";
     s.innerHTML = `
-      <div style="font-weight:600;margin-bottom:10px;">⚙️ Pengaturan pembulatan</div>
+      <div style="font-weight:600;margin-bottom:10px;">${t("roundingSettingsHeading")}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        <select id="round-mode" class="input" aria-label="Mode pembulatan" style="flex:1;min-width:130px;color:var(--ink);cursor:pointer;">
-          <option value="nearest">Ke terdekat</option>
-          <option value="up">Ke atas</option>
-          <option value="down">Ke bawah</option>
+        <select id="round-mode" class="input" aria-label="${t("roundModeAria")}" style="flex:1;min-width:130px;color:var(--ink);cursor:pointer;">
+          <option value="nearest">${t("roundNearest")}</option>
+          <option value="up">${t("roundUp")}</option>
+          <option value="down">${t("roundDown")}</option>
         </select>
-        <select id="round-to" class="input" aria-label="Kelipatan pembulatan" style="flex:1;min-width:110px;color:var(--ink);cursor:pointer;">
-          <option value="1000">per 1.000</option>
-          <option value="500">per 500</option>
-          <option value="100">per 100</option>
-          <option value="1">tanpa bulat</option>
+        <select id="round-to" class="input" aria-label="${t("roundToAria")}" style="flex:1;min-width:110px;color:var(--ink);cursor:pointer;">
+          <option value="1000">${t("roundPer1000")}</option>
+          <option value="500">${t("roundPer500")}</option>
+          <option value="100">${t("roundPer100")}</option>
+          <option value="1">${t("roundNone")}</option>
         </select>
       </div>
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
         <input type="checkbox" id="round-reconcile" style="width:16px;height:16px;cursor:pointer;" />
-        Samakan total terkumpul = bill (selisih dibebankan ke 1 orang)
+        ${t("reconcileLabel")}
       </label>`;
     insertIntoResultStep(s);
     $("round-mode").addEventListener("change", () => {
@@ -957,8 +1126,8 @@ function setupResultExtras() {
     wrap.style.cssText =
       "background:var(--bg-card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:16px;";
     wrap.innerHTML = `
-      <div style="font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px;">🤝 Siapa yang nalangin / bayar duluan?</div>
-      <select id="settle-payer" class="input" aria-label="Pilih yang menalangin" style="color:var(--ink);cursor:pointer;"></select>
+      <div style="font-size:14px;font-weight:600;color:var(--ink);margin-bottom:8px;">${t("settleHeading")}</div>
+      <select id="settle-payer" class="input" aria-label="${t("settlePayerAria")}" style="color:var(--ink);cursor:pointer;"></select>
       <div id="settle-list" style="margin-top:12px;"></div>`;
     insertIntoResultStep(wrap);
     $("settle-payer").addEventListener("change", () => {
@@ -976,11 +1145,11 @@ function setupResultExtras() {
     const btn = (id: string, label: string, bg: string, fg: string, extra = "") =>
       `<button type="button" id="${id}" class="btn" style="flex:1;min-width:120px;background:${bg};color:${fg};font-weight:bold;${extra}">${label}</button>`;
     row.innerHTML =
-      btn("btn-share-wa", "📲 WhatsApp", "#25D366", "#fff") +
-      btn("btn-copy", "📋 Salin teks", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
-      btn("btn-png", "🖼️ PNG", "#0F172A", "#fff") +
-      btn("btn-csv", "⬇️ CSV", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
-      btn("btn-link", "🔗 Salin link", "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);");
+      btn("btn-share-wa", t("btnWhatsApp"), "#25D366", "#fff") +
+      btn("btn-copy", t("btnCopyText"), "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
+      btn("btn-png", t("btnPng"), "#0F172A", "#fff") +
+      btn("btn-csv", t("btnCsv"), "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);") +
+      btn("btn-link", t("btnCopyLink"), "var(--line-soft)", "var(--ink)", "border:1px solid var(--line);");
     insertIntoResultStep(row);
 
     $("btn-share-wa").addEventListener("click", () => {
@@ -993,7 +1162,7 @@ function setupResultExtras() {
     $("btn-png").addEventListener("click", downloadPNG);
     $("btn-csv").addEventListener("click", downloadCSV);
     $("btn-link").addEventListener("click", () =>
-      flashCopy("btn-link", encodeShareLink(buildState()), "🔗 Salin link", "✓ Link tersalin!"),
+      flashCopy("btn-link", encodeShareLink(buildState()), t("btnCopyLink"), t("btnLinkCopied")),
     );
   }
 
@@ -1034,8 +1203,8 @@ function syncRoundingControls() {
 async function flashCopy(
   btnId: string,
   text: string,
-  base = "📋 Salin teks",
-  done = "✓ Tersalin!",
+  base = t("btnCopyText"),
+  done = t("btnCopiedText"),
 ) {
   try {
     await navigator.clipboard.writeText(text);
@@ -1045,7 +1214,7 @@ async function flashCopy(
       b.textContent = base;
     }, 1500);
   } catch {
-    await showAlert("Gagal menyalin otomatis. Salin manual:\n\n" + text);
+    await showAlert(t("clipboardErrorAlert", { text }));
   }
 }
 
@@ -1055,7 +1224,7 @@ function renderSettle() {
 
   const sel = $<HTMLSelectElement>("settle-payer");
   if (sel) {
-    sel.innerHTML = ['<option value="">— Pilih yang nalangin —</option>']
+    sel.innerHTML = [`<option value="">${t("settlePlaceholderOption")}</option>`]
       .concat(
         lastResults.map(
           (r) => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`,
@@ -1068,7 +1237,7 @@ function renderSettle() {
   const list = $("settle-list");
   if (!list) return;
   if (!payerName) {
-    list.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);">Pilih satu orang yang nalangin — nanti muncul siapa transfer berapa ke dia.</div>`;
+    list.innerHTML = `<div style="font-size:13px;color:var(--ink-muted);">${t("settleChoosePrompt")}</div>`;
     return;
   }
   const others = lastResults.filter(
@@ -1076,7 +1245,7 @@ function renderSettle() {
   );
   const totalIn = others.reduce((s, r) => s + r.totalRounded, 0);
   list.innerHTML = `
-    <div style="font-size:13px;color:var(--ink);margin-bottom:8px;">${escapeHtml(payerName)} nalangin semua, akan terima total <b>${fmtIDR(totalIn)}</b>:</div>
+    <div style="font-size:13px;color:var(--ink);margin-bottom:8px;">${t("settleSummary", { payer: escapeHtml(payerName), amount: `<b>${fmtIDR(totalIn)}</b>` })}</div>
     ${others
       .map(
         (r) => `
@@ -1242,7 +1411,7 @@ function showRestoreBanner() {
 
   let when = "";
   try {
-    when = new Date(s.ts).toLocaleString("id-ID", {
+    when = new Date(s.ts).toLocaleString(getLang() === "en" ? "en-US" : "id-ID", {
       day: "2-digit",
       month: "short",
       hour: "2-digit",
@@ -1257,10 +1426,10 @@ function showRestoreBanner() {
   banner.style.cssText =
     "background:var(--bg-card);border:1px solid var(--accent);border-radius:10px;padding:14px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;";
   banner.innerHTML = `
-    <div style="color:var(--ink);font-size:14px;">💾 Ada sesi tersimpan${when ? ` <span style="color:var(--ink-muted);">(${when})</span>` : ""}. Lanjutkan?</div>
+    <div style="color:var(--ink);font-size:14px;">${t("restoreBannerText", { when: when ? ` <span style="color:var(--ink-muted);">(${when})</span>` : "" })}</div>
     <div style="display:flex;gap:8px;">
-      <button type="button" id="restore-yes" class="btn" style="background:var(--accent);color:#fff;padding:8px 16px;font-size:14px;">Lanjutkan</button>
-      <button type="button" id="restore-no" class="btn" style="background:var(--line-soft);color:var(--ink);padding:8px 16px;font-size:14px;">Hapus</button>
+      <button type="button" id="restore-yes" class="btn" style="background:var(--accent);color:#fff;padding:8px 16px;font-size:14px;">${t("restoreBannerContinue")}</button>
+      <button type="button" id="restore-no" class="btn" style="background:var(--line-soft);color:var(--ink);padding:8px 16px;font-size:14px;">${t("historyDelBtn")}</button>
     </div>`;
   const up = $("step-upload");
   up.parentElement?.insertBefore(banner, up);
@@ -1296,12 +1465,12 @@ function renderResult() {
     <div class="summary-row" style="display:flex; flex-direction:column; padding:16px; border:1px solid var(--line); border-radius:12px; background:var(--bg-card); box-shadow:0 1px 3px rgba(0,0,0,0.05); ${paid[r.name] ? "opacity:0.6;" : ""}">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:2px dashed var(--line); padding-bottom:8px;">
         <div style="font-size:16px; font-weight:bold; color:var(--ink);">
-          👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:var(--accent-soft);color:var(--accent);padding:2px 8px;border-radius:6px;margin-left:6px;">LUNAS</span>` : ""}
+          👤 ${escapeHtml(r.name)} ${paid[r.name] ? `<span style="font-size:11px;font-weight:700;background:var(--accent-soft);color:var(--accent);padding:2px 8px;border-radius:6px;margin-left:6px;">${t("paidBadge")}</span>` : ""}
         </div>
         <div style="display:flex;align-items:center;gap:10px;">
-          <button type="button" data-send-wa="${escapeHtml(r.name)}" title="Kirim rincian ke ${escapeHtml(r.name)}" aria-label="Kirim rincian ke ${escapeHtml(r.name)}" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px;line-height:1;">📲</button>
+          <button type="button" data-send-wa="${escapeHtml(r.name)}" title="${t("sendPersonAria", { name: escapeHtml(r.name) })}" aria-label="${t("sendPersonAria", { name: escapeHtml(r.name) })}" style="background:none;border:none;cursor:pointer;font-size:16px;padding:2px;line-height:1;">📲</button>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-muted);cursor:pointer;">
-            <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> Lunas
+            <input type="checkbox" data-paid="${escapeHtml(r.name)}" ${paid[r.name] ? "checked" : ""} style="width:16px;height:16px;cursor:pointer;" /> ${t("paidLabel")}
           </label>
         </div>
       </div>
@@ -1316,15 +1485,15 @@ function renderResult() {
 
         <div style="height:1px; background:var(--line); margin:6px 0;"></div>
 
-        <div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8; font-weight:600;"><span>Subtotal</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
-        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>Pajak (Tax)</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
-        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>Service Charge</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
-        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--accent); font-weight:600;"><span>Diskon</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
-        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.6;"><span>Pembulatan</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
+        <div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8; font-weight:600;"><span>${t("subtotalLabel")}</span><span class="mono">${fmtIDR(r.subtotal)}</span></div>
+        ${r.taxShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>${t("taxLabel")}</span><span class="mono">${fmtIDR(r.taxShare)}</span></div>` : ""}
+        ${r.serviceShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.8;"><span>${t("serviceLabel")}</span><span class="mono">${fmtIDR(r.serviceShare)}</span></div>` : ""}
+        ${r.discountShare > 0 ? `<div style="display:flex; justify-content:space-between; color:var(--accent); font-weight:600;"><span>${t("discountLabel")}</span><span class="mono">-${fmtIDR(r.discountShare)}</span></div>` : ""}
+        ${Math.abs(r.totalRounded - r.totalRaw) > 0.5 ? `<div style="display:flex; justify-content:space-between; color:var(--ink); opacity:0.6;"><span>${t("roundingAdjustLabel")}</span><span class="mono">${r.totalRounded > r.totalRaw ? '+' : ''}${fmtIDR(r.totalRounded - r.totalRaw)}</span></div>` : ""}
       </div>
 
       <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:flex; justify-content:space-between; align-items:center;">
-        <span style="font-weight:bold; font-size:14px; color:var(--ink);">TOTAL BAYAR:</span>
+        <span style="font-weight:bold; font-size:14px; color:var(--ink);">${t("totalBayarLabel")}</span>
         <span class="mono" style="font-weight:800; font-size:18px; color:#FFFFFF; background:var(--accent); padding:6px 14px; border-radius:8px;">${fmtIDR(r.totalRounded)}</span>
       </div>
     </div>
@@ -1338,9 +1507,9 @@ function renderResult() {
 
   $("summary-sub").innerHTML = `
     <div style="background:var(--bg-card); border:1px solid var(--line); padding:12px; border-radius:8px; text-align:center; margin-top:10px; color:var(--ink);">
-      Total tagihan asli: <b>${fmtIDR(grandTotal)}</b><br/>
-      Total terkumpul setelah pembulatan: <b>${fmtIDR(totalRounded)}</b>
-      <span style="opacity:0.7; font-size:12px;">(Selisih: ${diffSign}${fmtIDR(diff)})</span>
+      ${t("grandTotalOriginal", { amount: `<b>${fmtIDR(grandTotal)}</b>` })}<br/>
+      ${t("grandTotalCollected", { amount: `<b>${fmtIDR(totalRounded)}</b>` })}
+      <span style="opacity:0.7; font-size:12px;">${t("grandTotalDiff", { diff: diffSign + fmtIDR(diff) })}</span>
     </div>
   `;
 
@@ -1350,17 +1519,17 @@ function renderResult() {
 
 $("btn-calculate").addEventListener("click", async () => {
   if (people.length === 0) {
-    await showAlert("Tambah minimal 1 orang dulu");
+    await showAlert(t("addMinPersonAlert"));
     return;
   }
   const unassigned = bill.items.filter(
     (it) => getItemSharersCount(it.id) === 0,
   );
   if (unassigned.length > 0) {
-    const names = unassigned.map((i) => i.name || "(tanpa nama)").join(", ");
+    const names = unassigned.map((i) => i.name || t("itemNoNameFallback")).join(", ");
     const proceed = await showConfirm(
-      `${unassigned.length} pesanan belum dibagi ke siapa pun:\n${names}\n\nKalau dilanjut, pesanan itu tidak ditagih ke siapa pun (total terkumpul jadi kurang dari bill). Tetap lanjut?`,
-      { confirmLabel: "Tetap lanjut", cancelLabel: "Batal" },
+      t("unassignedConfirm", { count: unassigned.length, names }),
+      { confirmLabel: t("proceedAnyway"), cancelLabel: t("btnCancel") },
     );
     if (!proceed) return;
   }
@@ -1396,12 +1565,12 @@ async function downloadPNG() {
     const btn = $<HTMLButtonElement>("btn-png");
     const original = btn.textContent;
     btn.disabled = true;
-    btn.textContent = "⏳ Memuat...";
+    btn.textContent = t("pngLoadingBtn");
     try {
       await loadHtmlToImage();
     } catch (e) {
       console.error(e);
-      await showAlert("Gagal memuat modul gambar. Cek koneksi lalu coba lagi.");
+      await showAlert(t("pngModuleErrorAlert"));
       return;
     } finally {
       btn.disabled = false;
@@ -1424,7 +1593,7 @@ async function downloadPNG() {
     triggerDownload(dataUrl, `patungan-${new Date().toISOString().slice(0, 10)}.png`);
   } catch (e) {
     console.error(e);
-    await showAlert("Gagal membuat PNG. Coba lagi.");
+    await showAlert(t("pngErrorAlert"));
   } finally {
     document.body.removeChild(node);
   }
@@ -1444,7 +1613,7 @@ async function tryLoadFromHash(): Promise<boolean> {
     const s: any = decodeShareState(encoded);
     history.replaceState(null, "", location.pathname); // clean up the hash
     if (!s || !s.bill) return false;
-    if (await showConfirm("Buka patungan dari link yang dibagikan?")) {
+    if (await showConfirm(t("restoreFromLinkConfirm"))) {
       restoreSession(s);
     }
     return true;
@@ -1477,7 +1646,7 @@ function pushHistory() {
 
 // ============ RESET ============
 $("btn-reset").addEventListener("click", async () => {
-  if (!(await showConfirm("Mulai ulang dari awal?"))) return;
+  if (!(await showConfirm(t("resetConfirm")))) return;
   bill = { items: [], tax: 0, service: 0, discount: 0 };
   people = [];
   selectedFile = null;
@@ -1495,8 +1664,20 @@ $("btn-reset").addEventListener("click", async () => {
 // ============ DARK MODE TOGGLE (#12) ============
 setupThemeToggle();
 
+// ============ LANGUAGE TOGGLE (ID/EN) ============
+applyStaticTranslations();
+setupLangToggle();
+// Re-render whatever's currently visible so dynamic content picks up the
+// new language too — static text is handled by applyStaticTranslations().
+onLangChange(() => {
+  renderBillStep();
+  if (!$("step-people").classList.contains("hidden")) renderPeopleStep();
+  if (!$("step-result").classList.contains("hidden")) renderResult();
+});
+
 // ============ PWA: register service worker (#11) ============
 registerServiceWorker();
+setupInstallPrompt();
 
 // ============ INIT ============
 // Priority: share link → if none, offer to restore the saved session.
