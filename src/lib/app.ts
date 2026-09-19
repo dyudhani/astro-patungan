@@ -46,6 +46,8 @@ let payLink = ""; // payment link (QRIS/e-wallet)
 let reconcile = false; // make the collected total match the bill (diff goes to 1 person)
 let summaryPaidBound = false; // has the "paid" checkbox listener been attached?
 let appendMode = false; // true after "+ Tambah dari struk lain" — merge instead of replace
+let reminderQueue: PersonResult[] = []; // sequential "remind unpaid" queue
+let reminderIndex = 0;
 
 // roundTotal & roundCfg → ./format ; calculations → ./calc ; OCR → ./ocr
 
@@ -1166,6 +1168,26 @@ function setupResultExtras() {
     );
   }
 
+  if (!$("remind-container")) {
+    const wrap = document.createElement("div");
+    wrap.id = "remind-container";
+    wrap.style.marginTop = "16px";
+    wrap.innerHTML = `
+      <button type="button" id="btn-remind-all" class="btn" style="width:100%;background:var(--warning-soft);color:var(--warning);font-weight:bold;border:1px solid var(--warning);">${t("btnRemindAll")}</button>
+      <div id="reminder-panel" class="hidden"></div>`;
+    insertIntoResultStep(wrap);
+    $("btn-remind-all").addEventListener("click", () => {
+      const unpaid = lastResults.filter((r) => !paid[r.name] && r.totalRounded > 0);
+      if (unpaid.length === 0) {
+        showToast(t("allPaidToast"));
+        return;
+      }
+      reminderQueue = unpaid;
+      reminderIndex = 0;
+      renderReminderPanel();
+    });
+  }
+
   // "paid" checklist + per-person WhatsApp send (delegated, attached once).
   if (!summaryPaidBound) {
     summaryPaidBound = true;
@@ -1188,6 +1210,47 @@ function setupResultExtras() {
       window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank");
     });
   }
+}
+
+// One-person-at-a-time WA reminder queue — each send needs its own click
+// (a fresh user gesture) or browsers block the popup.
+function renderReminderPanel() {
+  const panel = $("reminder-panel");
+  if (!panel) return;
+  if (reminderIndex >= reminderQueue.length) {
+    panel.classList.add("hidden");
+    panel.innerHTML = "";
+    return;
+  }
+  const r = reminderQueue[reminderIndex];
+  panel.classList.remove("hidden");
+  panel.style.cssText =
+    "margin-top:10px;background:var(--bg-card);border:1px solid var(--line);border-radius:12px;padding:14px;";
+  panel.innerHTML = `
+    <div style="font-size:13px;color:var(--ink-muted);margin-bottom:10px;">
+      ${t("reminderProgress", { current: reminderIndex + 1, total: reminderQueue.length, name: escapeHtml(r.name) })}
+    </div>
+    <div class="btn-row">
+      <button type="button" id="btn-remind-send" class="btn" style="flex:1;min-width:120px;background:#25D366;color:#fff;font-weight:bold;">${t("btnRemindSend", { name: escapeHtml(r.name) })}</button>
+      <button type="button" id="btn-remind-skip" class="btn" style="flex:1;min-width:100px;background:var(--line-soft);color:var(--ink);border:1px solid var(--line);">${t("btnRemindSkip")}</button>
+      <button type="button" id="btn-remind-cancel" class="btn" style="flex:1;min-width:100px;background:var(--line-soft);color:var(--ink);border:1px solid var(--line);">${t("btnRemindCancel")}</button>
+    </div>`;
+  $("btn-remind-send").addEventListener("click", () => {
+    const text = buildPersonShareText(r, payerName, currentBank(), capturePayLink());
+    window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank");
+    advanceReminder();
+  });
+  $("btn-remind-skip").addEventListener("click", advanceReminder);
+  $("btn-remind-cancel").addEventListener("click", () => {
+    reminderIndex = reminderQueue.length;
+    renderReminderPanel();
+  });
+}
+
+function advanceReminder() {
+  reminderIndex++;
+  if (reminderIndex >= reminderQueue.length) showToast(t("reminderDoneToast"));
+  renderReminderPanel();
 }
 
 function syncRoundingControls() {
