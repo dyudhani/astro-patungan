@@ -15,6 +15,9 @@ const dict = {
       "Upload foto struk, pilih siapa pesan apa, kelar. OCR jalan di browser kamu — tidak ada data yang dikirim ke server.",
 
     // Step 1: upload
+    stepperUpload: "Upload",
+    stepperCheckReceipt: "Cek Struk",
+    stepperSplit: "Bagi",
     step1Title: "Foto struk",
     dropzoneText: "Tap untuk pilih foto struk",
     dropzoneHint: "atau drag & drop · JPG, PNG, WEBP",
@@ -276,6 +279,9 @@ const dict = {
     heroDesc:
       "Upload the receipt photo, pick who ordered what, done. OCR runs in your browser — no data is ever sent to a server.",
 
+    stepperUpload: "Upload",
+    stepperCheckReceipt: "Check Receipt",
+    stepperSplit: "Split",
     step1Title: "Receipt photo",
     dropzoneText: "Tap to choose a receipt photo",
     dropzoneHint: "or drag & drop · JPG, PNG, WEBP",
@@ -568,6 +574,9 @@ export function setLang(l: Lang) {
 const textMap: Record<string, TKey> = {
   "brand-tag": "brandTag",
   "hero-desc": "heroDesc",
+  "stepper-label-1": "stepperUpload",
+  "stepper-label-2": "stepperCheckReceipt",
+  "stepper-label-3": "stepperSplit",
   "step1-title": "step1Title",
   "dropzone-text": "dropzoneText",
   "dropzone-hint": "dropzoneHint",

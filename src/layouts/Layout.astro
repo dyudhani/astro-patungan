@@ -579,6 +579,67 @@ const { title = "Patungan — Split Bill Cepat" } = Astro.props;
         letter-spacing: -0.01em;
       }
 
+      .stepper {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        max-width: 420px;
+        margin: 0 auto 24px;
+      }
+      .stepper-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+      .stepper-dot {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 700;
+        background: var(--bg-card);
+        border: 2px solid var(--line);
+        color: var(--ink-muted);
+        transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+      }
+      .stepper-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--ink-muted);
+        white-space: nowrap;
+        transition: color 0.2s ease;
+      }
+      .stepper-item.is-active .stepper-dot {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .stepper-item.is-active .stepper-label,
+      .stepper-item.is-done .stepper-label {
+        color: var(--ink);
+      }
+      .stepper-item.is-done .stepper-dot {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .stepper-line {
+        flex: 1;
+        height: 2px;
+        border-radius: 1px;
+        background: var(--line);
+        transition: background-color 0.2s ease;
+      }
+      .stepper-line.is-done {
+        background: var(--accent);
+      }
+
       .hidden {
         display: none !important;
       }
