@@ -477,7 +477,7 @@ function renderBillStep() {
 
     row.innerHTML = `
       <div style="display:flex; gap:6px; width: 100%; align-items:center;">
-        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" placeholder="${t("itemNamePlaceholder")}" aria-label="${t("itemNameAria")}" style="flex:1; color:var(--ink); font-weight:600;" />
+        <input type="text" class="input" value="${escapeHtml(item.name)}" data-id="${item.id}" data-field="name" list="item-name-suggestions" placeholder="${t("itemNamePlaceholder")}" aria-label="${t("itemNameAria")}" style="flex:1; color:var(--ink); font-weight:600;" />
         <button data-move="up" data-id="${item.id}" type="button" title="${t("moveUpTitle")}" aria-label="${t("moveUpAria")}" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↑</button>
         <button data-move="down" data-id="${item.id}" type="button" title="${t("moveDownTitle")}" aria-label="${t("moveDownAria")}" style="background:var(--line-soft); color:var(--ink); border:1px solid var(--line); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">↓</button>
         <button data-dup="${item.id}" type="button" title="${t("dupTitle")}" aria-label="${t("dupAria")}" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-soft); border-radius:8px; width:34px; height:38px; cursor:pointer; font-weight:bold;">⧉</button>
@@ -1262,6 +1262,32 @@ function syncRoundingControls() {
   if (rec) rec.checked = reconcile;
 }
 
+// Stepper reflects whichever section is furthest visible — driven by a
+// MutationObserver so it stays correct no matter which code path reveals a step.
+function syncStepper() {
+  const billVisible = !$("step-bill").classList.contains("hidden");
+  const peopleVisible = !$("step-people").classList.contains("hidden");
+  const resultVisible = !$("step-result").classList.contains("hidden");
+  const current = peopleVisible ? 3 : billVisible ? 2 : 1;
+  const doneCount = resultVisible ? 3 : current - 1;
+  for (let i = 1; i <= 3; i++) {
+    const item = $(`stepper-item-${i}`);
+    const dot = $(`stepper-item-${i}`)?.querySelector<HTMLElement>(".stepper-dot");
+    if (!item || !dot) continue;
+    const isDone = i <= doneCount;
+    item.classList.toggle("is-done", isDone);
+    item.classList.toggle("is-active", i === current && !isDone);
+    dot.textContent = isDone ? "✓" : dot.dataset.num || String(i);
+  }
+  for (let i = 1; i <= 2; i++) {
+    $(`stepper-line-${i}`)?.classList.toggle("is-done", i <= doneCount);
+  }
+}
+const stepperObserver = new MutationObserver(syncStepper);
+["step-bill", "step-people", "step-result"].forEach((id) =>
+  stepperObserver.observe($(id), { attributes: true, attributeFilter: ["class"] }),
+);
+
 // Copy text to the clipboard + a brief confirmation animation on the button.
 async function flashCopy(
   btnId: string,
@@ -1702,9 +1728,27 @@ function pushHistory() {
     const list = loadHistory();
     list.unshift({ ...buildState(), grand, peopleCount: people.length });
     localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, 20)));
+    populateItemSuggestions();
   } catch {
     /* noop */
   }
+}
+
+// Item-name autocomplete: suggest names previously used across past splits.
+function populateItemSuggestions() {
+  const dl = $<HTMLDataListElement>("item-name-suggestions");
+  if (!dl) return;
+  const names = new Set<string>();
+  for (const h of loadHistory()) {
+    for (const it of h?.bill?.items || []) {
+      const n = String(it?.name || "").trim();
+      if (n) names.add(n);
+    }
+  }
+  dl.innerHTML = Array.from(names)
+    .slice(0, 50)
+    .map((n) => `<option value="${escapeHtml(n)}"></option>`)
+    .join("");
 }
 
 // ============ RESET ============
@@ -1743,6 +1787,8 @@ registerServiceWorker();
 setupInstallPrompt();
 
 // ============ INIT ============
+populateItemSuggestions();
+syncStepper();
 // Priority: share link → if none, offer to restore the saved session.
 if (!(await tryLoadFromHash())) showRestoreBanner();
 

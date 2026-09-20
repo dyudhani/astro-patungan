@@ -17,6 +17,23 @@ import Layout from "../layouts/Layout.astro";
       </p>
     </section>
 
+    <div class="stepper" id="stepper" role="list" aria-label="Progress">
+      <div class="stepper-item is-active" id="stepper-item-1" data-step="1" role="listitem">
+        <span class="stepper-dot" data-num="1">1</span>
+        <span class="stepper-label" id="stepper-label-1">Upload</span>
+      </div>
+      <div class="stepper-line" id="stepper-line-1"></div>
+      <div class="stepper-item" id="stepper-item-2" data-step="2" role="listitem">
+        <span class="stepper-dot" data-num="2">2</span>
+        <span class="stepper-label" id="stepper-label-2">Cek Struk</span>
+      </div>
+      <div class="stepper-line" id="stepper-line-2"></div>
+      <div class="stepper-item" id="stepper-item-3" data-step="3" role="listitem">
+        <span class="stepper-dot" data-num="3">3</span>
+        <span class="stepper-label" id="stepper-label-3">Bagi</span>
+      </div>
+    </div>
+
     <section class="card" id="step-upload">
       <div class="step">
         <span class="step-num">1</span>
@@ -97,6 +114,7 @@ import Layout from "../layouts/Layout.astro";
       <div id="scan-warning"></div>
 
       <div id="items-list"></div>
+      <datalist id="item-name-suggestions"></datalist>
 
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px;">
         <button
